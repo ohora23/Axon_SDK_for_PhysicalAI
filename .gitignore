@@ -1,0 +1,81 @@
+# Build directories
+build/
+build-*/
+out/
+cmake-build-*/
+
+# Object files / static libs / shared libs
+*.o
+*.obj
+*.a
+*.la
+*.lo
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+
+# Compilation artifacts
+*.gch
+*.pch
+*.d
+*.dSYM/
+compile_commands.json
+
+# CMake noise
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+install_manifest.txt
+Testing/
+CTestTestfile.cmake
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+.DS_Store
+
+# Python (for future bindings)
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+.venv/
+venv/
+
+# Rust (for future Iceoryx2 native crate)
+target/
+Cargo.lock
+
+# Profiling / traces
+perf.data
+perf.data.old
+*.trace
+*.svg.flamegraph
+
+# Spike PoC runtime sockets / temp files
+/tmp/dczc_*
+spike-runs/
+*.bag
+
+# Local secrets / env
+.env
+.env.local
+*.local
+
+# Existing on-disk artifacts that should not be tracked
+.gstack/
+.omc/
+.claude/
+
+# Generated PDFs / docs build output
+docs/_build/
+*.pdf

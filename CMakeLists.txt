@@ -11,6 +11,7 @@ option(DCZC_ENABLE_AMD_XDNA  "Enable AMD XDNA NPU backend"               OFF)
 option(DCZC_ENABLE_JETSON    "Enable NVIDIA Jetson Orin backend"         OFF)
 option(DCZC_ENABLE_RT        "Enable RT-Linux specific code paths"       ON)
 option(DCZC_BUILD_TESTS      "Build unit and integration tests"          ON)
+option(DCZC_WITH_ICEORYX2    "Use the Iceoryx2 metadata-plane backend"   OFF)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
@@ -29,22 +30,28 @@ if(NOT UNIX OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(FATAL_ERROR "dczc is Linux-only (depends on dma-buf, V4L2, SCM_RIGHTS). Detected: ${CMAKE_SYSTEM_NAME}")
 endif()
 
-# Dependencies (currently a placeholder — Iceoryx2 will be wired in after the spike PoC).
-# Until then the metadata plane uses a POSIX-SHM seqlock slot (src/metadata_channel.cpp),
-# an API-compatible stand-in for the Iceoryx2 lock-free queue.
-# find_package(iceoryx2 REQUIRED)
-
 find_package(Threads REQUIRED)
 
-# Core library — week 3-4 formal implementation.
-#   - FD plane      : src/sidecar.cpp        (SCM_RIGHTS / pidfd_getfd)
-#   - metadata plane: src/metadata_channel.cpp (seqlock slot; Iceoryx2 stand-in)
-#   - buffer pool   : src/pool.cpp           (Custom / UDMABUF / V4L2)
-#   - RT helpers    : src/rt.cpp             (mlockall, SCHED_FIFO, prefault)
+# Metadata plane backend. The seqlock POSIX-SHM slot (src/metadata_channel.cpp)
+# is always built; with -DDCZC_WITH_ICEORYX2=ON the real Iceoryx2 lock-free queue
+# backend (src/metadata_channel_iox2.cpp) is compiled in and selected at runtime
+# via the DCZC_METADATA_BACKEND env var (default: iceoryx2 when compiled in).
+set(DCZC_METADATA_SOURCES src/metadata_channel.cpp)
+if(DCZC_WITH_ICEORYX2)
+    find_package(iceoryx2-cxx CONFIG REQUIRED)
+    list(APPEND DCZC_METADATA_SOURCES src/metadata_channel_iox2.cpp)
+endif()
+
+# Core library.
+#   - FD plane      : src/sidecar.cpp          (SCM_RIGHTS / pidfd_getfd)
+#   - metadata plane: src/metadata_channel.cpp (seqlock backend + factory)
+#                     src/metadata_channel_iox2.cpp (Iceoryx2 backend, optional)
+#   - buffer pool   : src/pool.cpp             (Custom / UDMABUF / V4L2)
+#   - RT helpers    : src/rt.cpp               (mlockall, SCHED_FIFO, prefault)
 #   - pub/sub       : src/publisher.cpp, src/subscriber.cpp
 add_library(dczc
     src/sidecar.cpp
-    src/metadata_channel.cpp
+    ${DCZC_METADATA_SOURCES}
     src/pool.cpp
     src/rt.cpp
     src/publisher.cpp
@@ -55,6 +62,11 @@ target_include_directories(dczc PUBLIC
 target_compile_features(dczc PUBLIC cxx_std_20)
 # shm_open/shm_unlink live in librt on glibc; pthreads for std::thread in tests.
 target_link_libraries(dczc PUBLIC Threads::Threads rt)
+
+if(DCZC_WITH_ICEORYX2)
+    target_compile_definitions(dczc PUBLIC DCZC_WITH_ICEORYX2=1)
+    target_link_libraries(dczc PUBLIC iceoryx2-cxx::static-lib-cxx)
+endif()
 
 # Enable testing before descending into subdirectories so that add_test() calls
 # in examples/ (e.g. the demo smoke test) and tests/ all register.

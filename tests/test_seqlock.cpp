@@ -10,6 +10,7 @@
 #include "dczc_test.h"
 
 #include <atomic>
+#include <cstdlib>
 #include <thread>
 
 using namespace dczc;
@@ -120,4 +121,9 @@ DCZC_TEST(concurrent_no_torn_reads) {
     delete pub;
 }
 
-DCZC_TEST_MAIN("seqlock")
+// This suite validates the seqlock backend specifically (torn-read semantics),
+// so pin the backend even when the library is built with Iceoryx2 enabled.
+int main() {
+    setenv("DCZC_METADATA_BACKEND", "seqlock", 1);
+    return ::dczc_test::run_all("seqlock");
+}

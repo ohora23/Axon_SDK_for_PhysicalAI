@@ -30,25 +30,42 @@ if(NOT UNIX OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 # Dependencies (currently a placeholder — Iceoryx2 will be wired in after the spike PoC).
+# Until then the metadata plane uses a POSIX-SHM seqlock slot (src/metadata_channel.cpp),
+# an API-compatible stand-in for the Iceoryx2 lock-free queue.
 # find_package(iceoryx2 REQUIRED)
 
-# Core library (currently header-only skeleton).
-add_library(dczc INTERFACE)
-target_include_directories(dczc INTERFACE
+find_package(Threads REQUIRED)
+
+# Core library — week 3-4 formal implementation.
+#   - FD plane      : src/sidecar.cpp        (SCM_RIGHTS / pidfd_getfd)
+#   - metadata plane: src/metadata_channel.cpp (seqlock slot; Iceoryx2 stand-in)
+#   - buffer pool   : src/pool.cpp           (Custom / UDMABUF / V4L2)
+#   - RT helpers    : src/rt.cpp             (mlockall, SCHED_FIFO, prefault)
+#   - pub/sub       : src/publisher.cpp, src/subscriber.cpp
+add_library(dczc
+    src/sidecar.cpp
+    src/metadata_channel.cpp
+    src/pool.cpp
+    src/rt.cpp
+    src/publisher.cpp
+    src/subscriber.cpp)
+target_include_directories(dczc PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
-target_compile_features(dczc INTERFACE cxx_std_20)
+target_compile_features(dczc PUBLIC cxx_std_20)
+# shm_open/shm_unlink live in librt on glibc; pthreads for std::thread in tests.
+target_link_libraries(dczc PUBLIC Threads::Threads rt)
 
 # Examples
 if(DCZC_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
-# Tests (placeholder — will land in week 4+).
-# if(DCZC_BUILD_TESTS)
-#     enable_testing()
-#     add_subdirectory(tests)
-# endif()
+# Tests
+if(DCZC_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
 
 # Install
 install(DIRECTORY include/dczc DESTINATION include)

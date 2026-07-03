@@ -56,6 +56,12 @@ target_compile_features(dczc PUBLIC cxx_std_20)
 # shm_open/shm_unlink live in librt on glibc; pthreads for std::thread in tests.
 target_link_libraries(dczc PUBLIC Threads::Threads rt)
 
+# Enable testing before descending into subdirectories so that add_test() calls
+# in examples/ (e.g. the demo smoke test) and tests/ all register.
+if(DCZC_BUILD_TESTS)
+    enable_testing()
+endif()
+
 # Examples
 if(DCZC_BUILD_EXAMPLES)
     add_subdirectory(examples)
@@ -63,7 +69,6 @@ endif()
 
 # Tests
 if(DCZC_BUILD_TESTS)
-    enable_testing()
     add_subdirectory(tests)
 endif()
 

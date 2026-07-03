@@ -67,6 +67,11 @@ if(DCZC_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
+# Python bindings (pybind11)
+if(DCZC_BUILD_PYTHON)
+    add_subdirectory(python)
+endif()
+
 # Tests
 if(DCZC_BUILD_TESTS)
     add_subdirectory(tests)

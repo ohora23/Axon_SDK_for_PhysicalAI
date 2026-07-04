@@ -45,15 +45,21 @@ Green = zero-copy region. Blue = metadata message. Twelve more diagrams in [`Des
 
 ---
 
-## Target Metrics
+## Target Metrics — and what we measured
 
-| Metric | Target | Baseline (ROS2 + rmw_iceoryx_cpp) |
+Measured on a workstation (RTX 5080 / Ryzen 9800X3D, non-RT kernel) against ROS2 Jazzy /
+Fast-RTPS on the same workload. Full detail: [docs/hardware-verification.md](docs/hardware-verification.md).
+
+| Metric | Target | Measured (dczc vs ROS2) |
 |---|---|---|
-| Sensor→command P99 latency | ≤ `T_inf + 5ms` | TBD (week 1-2 baseline) |
-| 1kHz RT worst-case jitter | < 100µs | cyclictest 24h |
-| Inter-device memory copies | **0** (eBPF-verified) | typically 1-3 |
-| Staleness bound | sum of 7 explicit terms | non-deterministic |
-| Page faults during RT | **0** | OS / config dependent |
+| Single-stream latency (1 MiB) | low | **46 µs vs 971 µs — 20.9× lower** ✅ |
+| CPU at 295 MB/s (multi-stream) | flat in bandwidth | **0.30 vs 0.98 cores — 3.3× less** ✅ |
+| Frame delivery under load | no drops | **100 % vs ~96.7 %** ✅ |
+| Memory copies (same bytes) | 0 payload copies | **cache-misses 8.6× lower; ~0 transport syscalls/frame** ✅ |
+| Page faults during RT | **0** | **0 / frame** (flat at 20× the frames) ✅ |
+| GPU zero-copy import | real hardware | **RTX 5080: 200/200 frames, 0 copies, 1.68 GB** ✅ |
+| Staleness bound | sum of 7 explicit terms | deterministic formula (§5) ✅ |
+| 1kHz RT worst-case jitter | < 100µs | pending PREEMPT_RT kernel 🟡 |
 
 The formula:
 ```
@@ -62,6 +68,41 @@ worst_case_staleness ≤
   + T_sc + T_rt_seq + T_view
 ```
 [Definition](DesignFiles/detailed_design_doc.md#5-bounded-staleness-formula) | [Visualization](DesignFiles/diagrams.md#9-bounded-staleness--visualized)
+
+---
+
+## Measured Results
+
+The thesis is that transport cost is **O(1) in payload size**: only fixed-size descriptors
+cross the metadata plane while the tensor stays in a shared dma-buf. So as sensor bandwidth
+grows, dczc's CPU stays flat while ROS2/DDS scales with the payload it serializes and copies.
+
+**CPU stays flat as bandwidth grows** (serving-robot multi-stream workload, [`benchmarks/mock`](benchmarks/mock/README.md)):
+
+![CPU vs bandwidth](docs/assets/02_cpu_sweep.png)
+
+At 295 MB/s dczc uses **0.30 cores vs ROS2's 0.98 (3.3×)** — and drops **zero** frames while
+ROS2's worst stream falls to ~96.7 %. The CPU dczc *doesn't* spend on data plumbing is CPU
+left for perception and control.
+
+**Single-stream latency, and it widens with payload** ([`benchmarks/`](benchmarks/)):
+
+![Single-stream latency](docs/assets/01_latency_single.png)
+
+**Copies aren't free** — same delivered bytes, kernel-measured ([docs/hardware-verification.md](docs/hardware-verification.md)):
+
+![Memory cost](docs/assets/04_memory.png)
+
+ROS2 spends **8.6× the cache-misses** and **5× the instructions** moving the same data.
+
+**Real GPU zero-copy without a robot board.** dczc's FD sidecar carries a live RTX 5080 GPU
+memory handle across processes: 200/200 frames validated on-GPU, **0 host payload copies**,
+1.68 GB moved zero-copy. Plus RT page-faults measured at **0 per frame**. See
+[docs/hardware-verification.md](docs/hardware-verification.md) and the architecture decisions
+in [docs/adr/](docs/adr/).
+
+> Numbers are machine-specific — reproduce with `benchmarks/mock/mock_compare.py` and the
+> `instrumentation/` suite (all resource-bounded so they won't freeze the box).
 
 ---
 
@@ -77,9 +118,24 @@ Video drops after the first build (week 9-10).
 
 ---
 
-## Quick Build (placeholder)
+## Quick Build
 
-> The only currently buildable code is the week 1-2 spike PoC under `examples/spike_poc/`. The full library lands in week 4+.
+The full library, examples, Python bindings, benchmarks, and hardware-instrumentation
+suite build today:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDCZC_BUILD_PYTHON=ON
+cmake --build build -j
+(cd build && ctest --output-on-failure)      # 8/8, warning-clean
+
+# dczc vs ROS2 benchmarks (ROS2 optional)
+python3 benchmarks/mock/mock_compare.py --scales 1,2,3,4 --seconds 5
+# real-hardware verification (GPU / page-faults / syscalls / cache)
+instrumentation/gpu/build.sh && instrumentation/run_bounded.sh ./build/gpu_sidecar_demo 8 200
+```
+
+Optional: `-DDCZC_WITH_ICEORYX2=ON` for the Iceoryx2 metadata backend
+(see [docs/metadata-backends.md](docs/metadata-backends.md)).
 
 ### Prerequisites
 
@@ -185,17 +241,17 @@ A. Apache 2.0 (with patent grant — friendlier for robotics industry adoption).
 
 ## Reproducible Benchmark Environment
 
-> After the first build, the README's benchmark graphs are measured under:
+The current README graphs were measured on a workstation (numbers are machine-specific):
 
 ```
-[TODO: filled in after the first build]
-- Board: AMD AI Series xxx or NVIDIA Jetson Orin xxx
-- Kernel: Linux x.y.z + PREEMPT_RT
-- Camera: resolution / fps
-- Model: name + input tensor shape + inference rate
-- Measurement window: cyclictest 24h
-- ROS2 baseline: distro / RMW / QoS
+- Host: AMD Ryzen 7 9800X3D (16 threads), NVIDIA RTX 5080, 80 GB RAM
+- Kernel: Linux 6.17 (non-RT) — 1kHz jitter target pending a PREEMPT_RT kernel
+- Middleware: ROS2 Jazzy / Fast-RTPS (default DDS), Iceoryx2 v0.9.2
+- Payloads: synthetic tensors; serving-robot multi-stream profile (benchmarks/mock)
+- Runner: all under instrumentation/run_bounded.sh (resource-bounded)
 ```
+
+Full method + raw numbers: [docs/hardware-verification.md](docs/hardware-verification.md).
 
 ---
 
@@ -206,6 +262,9 @@ A. Apache 2.0 (with patent grant — friendlier for robotics industry adoption).
 | [`DesignFiles/data-centric-zero-copy-design-20260510.md`](DesignFiles/data-centric-zero-copy-design-20260510.md) | Direction, differentiation, risk/mitigation (APPROVED v2) |
 | [`DesignFiles/detailed_design_doc.md`](DesignFiles/detailed_design_doc.md) | Mechanism details (14 sections, ~700 lines) |
 | [`DesignFiles/diagrams.md`](DesignFiles/diagrams.md) | 12 Mermaid diagrams |
+| [`docs/adr/`](docs/adr/) | Architecture Decision Records (why, with measured evidence) |
+| [`docs/hardware-verification.md`](docs/hardware-verification.md) | Measured results (GPU zero-copy, page-faults, syscalls, cache) |
+| [`docs/metadata-backends.md`](docs/metadata-backends.md) | Seqlock vs Iceoryx2 backend |
 | `examples/spike_poc/README.md` | Week 1-2 spike PoC guide |
 
 ---

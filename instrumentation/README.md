@@ -4,6 +4,8 @@ These tools demonstrate dczc's core claims on **this development PC's own hardwa
 (RTX 5080 GPU, 16-core CPU, kernel tracing) — no robot/accelerator board required.
 Every run goes through a **resource harness** so verification never freezes the box.
 
+> 📄 Measured results with full context: [`docs/hardware-verification.md`](../docs/hardware-verification.md).
+
 | Demo | Proves | Privilege | Status |
 |---|---|---|---|
 | `gpu/gpu_sidecar_demo` | dczc sidecar carries a **real GPU memory handle** → zero-copy GPU↔GPU across processes | none | ✅ verified |

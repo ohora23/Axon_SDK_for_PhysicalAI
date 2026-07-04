@@ -8,8 +8,9 @@ Every run goes through a **resource harness** so verification never freezes the 
 |---|---|---|---|
 | `gpu/gpu_sidecar_demo` | dczc sidecar carries a **real GPU memory handle** → zero-copy GPU↔GPU across processes | none | ✅ verified |
 | `perf/run_pagefaults.sh` | RT loop adds **0 page faults/frame** (mlockall/MAP_POPULATE) | none | ✅ verified |
-| `ebpf/run_copy_compare.sh` | payload not copied through the kernel per frame | sudo (bpftrace) | tool |
-| `perf/run_membw.sh` | ROS2 burns cache/memory bandwidth on copies; dczc doesn't | sudo (perf HW) | tool |
+| `perf/run_syscalls.sh` | dczc payload path is **0 transport syscalls/frame** vs ROS2's DDS | none | ✅ verified |
+| `perf/run_membw.sh` | ROS2 burns **8.6× the cache-misses** copying payloads; dczc doesn't | perf (paranoid≤1) | ✅ verified |
+| `ebpf/run_copy_compare.sh` | direct `copy_to_user` byte count | sudo (bpftrace) | tool |
 
 ## 0. Resource harness (freeze protection)
 
@@ -79,32 +80,58 @@ Identical minor faults despite 20× the frames → the RT streaming loop adds **
 faults per frame**; major faults stay 0. The `mlockall` / `MAP_POPULATE` / prefault path
 (design doc §3.2, §5.4) holds.
 
-## 3. eBPF copy trace (sudo)
+## 3. Data-path syscalls = 0 per frame ✅
 
 ```bash
-sudo -v                                   # cache credentials
-instrumentation/ebpf/run_copy_compare.sh 2 4
+instrumentation/perf/run_syscalls.sh 1 2
 ```
 
-`bpftrace` counts `_copy_to_user` / `_copy_from_user` bytes (and socket i/o) by process
-while the dczc and ROS2 MockSystem workloads run (bounded). dczc's data path is pure
-shared-memory (producer stores into the mmap'd dma-buf, RT consumer loads from it — no
-per-frame kernel copy of the payload); ROS2 moves each frame through the DDS transport.
+`strace -f -c` (no sudo) counts transport syscalls. **Verified** (scale 1, ~964 frames,
+8 streams):
 
-## 4. Memory-subsystem cost (sudo)
+| | dczc | ROS2 (Fast-RTPS) |
+|---|---|---|
+| total syscalls | **404** | 10,187 (**25×**) |
+| transport (send/recv msg+to+from) | **16** (one-time handshake) | 516 |
+| per-frame transport syscalls | **~0** (8 sendmsg / 964 frames) | ~0.5 |
+
+dczc publishes each frame with a seqlock store into shared memory — after the one-time FD
+handshake (8 sendmsg for 8 streams), the payload never touches a syscall. ROS2 runs the
+DDS machinery for every frame.
+
+## 4. Memory-subsystem cost — copies aren't free ✅
 
 ```bash
-sudo -v
-instrumentation/perf/run_membw.sh 2 4
+instrumentation/perf/run_membw.sh 2 4        # perf, no sudo when paranoid≤1
 ```
 
-`perf stat` compares cache-misses / LLC traffic / context-switches for the same workload.
-"Copies aren't free": ROS2 serializes+copies every payload (both sides), spending cache
-and memory bandwidth that dczc doesn't. Complements the CPU result already in
-[`benchmarks/mock`](../benchmarks/mock/README.md) (dczc flat vs ROS2 3.3× CPU at scale 4).
+`perf stat` compares cache/instruction cost for the same delivered bytes. **Verified**
+(scale 2 ≈ 148 MB/s, 4 s):
+
+| counter | dczc | ROS2 | ratio |
+|---|---|---|---|
+| cache-references | 131 M | 925 M | 7.0× |
+| cache-misses | **15.0 M** | **128.2 M** | **8.6×** |
+| instructions | 4.9 B | 24.8 B | 5.1× |
+| context-switches | 6,931 | 10,427 | 1.5× |
+
+ROS2 serializes+copies every payload (both sides), spending ~8.6× the cache-misses and
+~5× the instructions dczc does to move the same data. This is the memory-side companion to
+the CPU result in [`benchmarks/mock`](../benchmarks/mock/README.md) (dczc flat vs ROS2
+3.3× CPU at scale 4).
+
+## 5. Direct copy_to_user byte count (sudo — optional)
+
+```bash
+sudo instrumentation/ebpf/run_copy_compare.sh 2 4
+```
+
+`bpftrace` counts `_copy_to_user`/`_copy_from_user` bytes by process. This is the only
+tool that still needs root (bpftrace requires it); the §1–§4 results above already
+quantify the copy cost without it.
 
 ---
 
-*All demos are resource-bounded. The two privileged ones need `sudo` only because this
-host has `kernel.perf_event_paranoid=4` and `bpftrace` requires root; lowering
-`perf_event_paranoid` to `1` lets `perf` run unprivileged.*
+*All demos are resource-bounded via `run_bounded.sh`. `perf` runs unprivileged once
+`kernel.perf_event_paranoid` is ≤ 1 (`sudo sysctl kernel.perf_event_paranoid=1`);
+only the raw `bpftrace` copy counter needs full root.*

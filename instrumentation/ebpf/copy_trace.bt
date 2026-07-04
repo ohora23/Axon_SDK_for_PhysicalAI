@@ -1,0 +1,28 @@
+#!/usr/bin/env bpftrace
+// SPDX-License-Identifier: Apache-2.0
+//
+// copy_trace.bt — count kernel<->user copies and network send/recv, by process.
+//
+// The dczc data path is pure shared-memory: the producer stores into an mmap'd
+// dma-buf and the RT consumer loads from it — no per-frame syscall, no
+// copy_to_user/copy_from_user of the payload. ROS2/DDS moves each frame through
+// the transport, which shows up here as copy_*_user and/or sendmsg/recvmsg bytes.
+//
+// Run via instrumentation/ebpf/run_copy_compare.sh (needs sudo). Aggregates are
+// keyed by process name (comm) and printed on exit.
+
+BEGIN { printf("tracing copy_to_user / copy_from_user / net i/o ... (Ctrl-C or -c cmd)\n"); }
+
+kprobe:_copy_to_user   { @to_user_bytes[comm]   = sum(arg2); @to_user_calls[comm]   = count(); }
+kprobe:_copy_from_user { @from_user_bytes[comm] = sum(arg2); @from_user_calls[comm] = count(); }
+
+// Datagram/stream socket payloads (DDS UDP/TCP loopback path).
+tracepoint:syscalls:sys_enter_sendmsg  { @net_send_bytes[comm] = sum(args.msg->msg_iov->iov_len); }
+tracepoint:syscalls:sys_enter_recvmsg  { @net_recv_calls[comm] = count(); }
+
+END {
+    printf("\n== copy_to_user bytes ==\n");   print(@to_user_bytes);
+    printf("\n== copy_from_user bytes ==\n"); print(@from_user_bytes);
+    clear(@to_user_calls); clear(@from_user_calls);
+    clear(@net_send_bytes); clear(@net_recv_calls);
+}

@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>dczc_ros1</name>
+  <version>0.0.1</version>
+  <description>dczc ROS1 offload PoC: descriptor topic + dma-buf SCM_RIGHTS sidecar (zero-copy payload).</description>
+  <maintainer email="ohora23@gmail.com">ohora23</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <build_depend>roscpp</build_depend>
+  <build_depend>std_msgs</build_depend>
+  <build_depend>message_generation</build_depend>
+
+  <exec_depend>roscpp</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>message_runtime</exec_depend>
+</package>

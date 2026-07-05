@@ -35,6 +35,10 @@ public:
 
     PoolGeneration generation() const noexcept;
 
+    // Page-aligned bytes per buffer (authoritative — the publisher uses this
+    // instead of lseek(SEEK_END), which some real dma-buf exporters reject).
+    std::size_t buffer_size() const noexcept;
+
     // Acquire the next free buffer. Advances the ring by one slot.
     // The returned index maps into dma_buf_fds()[index].
     int acquire_next();

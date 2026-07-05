@@ -193,6 +193,10 @@ PoolGeneration TensorPool::generation() const noexcept {
     return impl_->gen;
 }
 
+std::size_t TensorPool::buffer_size() const noexcept {
+    return impl_->buffer_size;
+}
+
 int TensorPool::acquire_next() {
     const std::size_t n = impl_->buffers.size();
     for (std::size_t k = 0; k < n; ++k) {

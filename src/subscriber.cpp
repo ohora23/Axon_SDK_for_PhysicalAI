@@ -138,6 +138,20 @@ std::optional<TensorView> TensorSubscriber::latest_view(int max_retry) noexcept 
             v.sync_fd = -1;  // fence surfacing via sidecar is deferred (see sidecar.cpp)
             v.seqlock_retries = retries;
 
+            // v2 imaging/depth metadata — forward so the consumer can index
+            // padded rows, scale to physical units, and deproject.
+            v.row_pitch = desc.row_pitch;
+            v.depth_scale = desc.depth_scale;
+            v.invalid_value = desc.invalid_value;
+            v.sample_units = desc.sample_units;
+            v.capture_clock = desc.capture_clock;
+            v.layout = desc.layout;
+            v.capture_ts_ns = desc.capture_ts_ns;
+            v.intr_fx = desc.intr_fx; v.intr_fy = desc.intr_fy;
+            v.intr_cx = desc.intr_cx; v.intr_cy = desc.intr_cy;
+            v.intr_ref_width = desc.intr_ref_width;
+            v.intr_ref_height = desc.intr_ref_height;
+
             s.last_good = v;
             s.last_good_publish_ts_ns = desc.producer_publish_ts_ns;
             s.have_last_good = true;

@@ -11,3 +11,7 @@ endif()
 if(IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/demo)
     add_subdirectory(demo)
 endif()
+
+if(IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/depth_filter)
+    add_subdirectory(depth_filter)
+endif()

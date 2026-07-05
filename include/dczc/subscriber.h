@@ -23,6 +23,17 @@ struct TensorView {
     SeqNo             seqno;
     int               sync_fd;       // Fence FD when SyncFileViaSidecar, else -1
     int               seqlock_retries; // RT diagnostics (track P99 distribution)
+
+    // ---- v2: imaging / depth metadata (forwarded from the descriptor) ----
+    std::uint32_t     row_pitch;     // 0 = packed; else bytes per row (padded)
+    float             depth_scale;   // sample -> physical units (0 = unset)
+    std::uint32_t     invalid_value; // no-data sentinel
+    SampleUnits       sample_units;
+    CaptureClock      capture_clock;
+    TensorLayout      layout;
+    std::uint64_t     capture_ts_ns; // sensor timestamp (see capture_clock)
+    float             intr_fx, intr_fy, intr_cx, intr_cy;  // 0 = unset
+    std::uint32_t     intr_ref_width, intr_ref_height;
 };
 
 class TensorSubscriber {

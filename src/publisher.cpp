@@ -16,6 +16,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "dczc/detail/descriptor_util.h"
 #include "dczc/detail/metadata_channel.h"
 #include "dczc/detail/sidecar.h"
 #include "dczc/rt.h"
@@ -72,20 +73,18 @@ std::unique_ptr<TensorPublisher> TensorPublisher::create(
     pub->impl_->service_name.assign(service_name);
     pub->impl_->pool = &pool;
 
-    // Derive the per-buffer byte size from the first buffer's view request.
-    // The pool page-aligns internally; we mmap that aligned size.
-    pub->impl_->buffer_size = 0;
-    // We don't have direct access to the pool's aligned size, so query via mmap
-    // failure-safe: use a generous map of the requested config is not available
-    // here; instead we rely on the descriptor.size for bounds. Map lazily in
-    // handshake_pool once we know the size from the caller's first publish is
-    // not ideal — so we map using the pool's reported buffer count and a size
-    // discovered from the udmabuf/memfd via lseek.
-    const auto& fds = pool.dma_buf_fds();
-    if (!fds.empty()) {
-        off_t sz = ::lseek(fds[0], 0, SEEK_END);
-        if (sz > 0) pub->impl_->buffer_size = static_cast<std::size_t>(sz);
+    // Per-buffer byte size: use the pool's authoritative page-aligned size.
+    // (lseek(SEEK_END) is only a fallback — some real dma-buf exporters reject
+    // it and would silently yield 0, breaking every mmap.)
+    pub->impl_->buffer_size = pool.buffer_size();
+    if (pub->impl_->buffer_size == 0) {
+        const auto& fds = pool.dma_buf_fds();
+        if (!fds.empty()) {
+            off_t sz = ::lseek(fds[0], 0, SEEK_END);
+            if (sz > 0) pub->impl_->buffer_size = static_cast<std::size_t>(sz);
+        }
     }
+    if (pub->impl_->buffer_size == 0) return nullptr;  // can't map buffers
 
     pub->impl_->server = detail::SidecarServer::create(pub->impl_->service_name);
     pub->impl_->meta = detail::MetadataChannel::create_publisher(pub->impl_->service_name);
@@ -135,6 +134,10 @@ void TensorPublisher::publish(AcquiredDescriptor&& d, int sync_fd) {
     desc->pool_generation = impl_->pool->generation();
     desc->bo_handle = static_cast<BoHandle>(d.buffer_index >= 0 ? d.buffer_index : 0);
     desc->producer_publish_ts_ns = rt_now_ns();
+
+    // Reject a descriptor whose [offset, size) or row_pitch would read/write
+    // outside the buffer — drop the frame rather than publish a corrupt view.
+    if (!detail::descriptor_is_valid(*desc, impl_->buffer_size)) return;
 
     // Deliver an explicit fence FD before publishing the metadata that references
     // it, so a consumer that reads the new seqno can already find the fence.

@@ -41,6 +41,34 @@ enum class SyncFenceKind : std::uint8_t {
     SyncFileViaSidecar = 2,  // sync_file FD passed through the sidecar; consumer polls it
 };
 
+// ---------- v2: imaging / depth semantics ----------
+
+// Physical meaning of a raw sample. Combined with TensorDescriptor::depth_scale
+// (e.g. Millimeters means value * 1 mm, or use depth_scale for finer units).
+enum class SampleUnits : std::uint8_t {
+    Unknown     = 0,
+    Raw         = 1,  // dimensionless / application-defined
+    Millimeters = 2,  // depth in mm (or value * depth_scale mm)
+    Meters      = 3,  // metric depth (value * depth_scale m, or float metres)
+    Disparity   = 4,  // stereo disparity
+};
+
+// Clock domain of TensorDescriptor::capture_ts_ns, so consumers know whether
+// timestamps from different sensors are comparable.
+enum class CaptureClock : std::uint8_t {
+    Unknown      = 0,
+    MonotonicRaw = 1,  // CLOCK_MONOTONIC_RAW
+    V4L2Hardware = 2,  // V4L2 hardware timestamp
+};
+
+// Memory layout of the tensor in the buffer.
+enum class TensorLayout : std::uint8_t {
+    Unknown = 0,
+    HW      = 1,  // 2D image (rows x cols), possibly row_pitch-padded
+    HWC     = 2,  // interleaved channels
+    CHW     = 3,  // planar channels
+};
+
 // ---------- Pool backend ----------
 
 enum class PoolBackend : std::uint8_t {

@@ -12,8 +12,40 @@ DCZC_TEST(abi_layout) {
     // Fixed-size POD invariants the wire format depends on.
     CHECK(sizeof(TensorDescriptor) % 8 == 0);
     CHECK(sizeof(TensorDescriptor) <= 256);
+    CHECK(sizeof(TensorDescriptor) == 144);   // wire v2 pinned size
     CHECK(alignof(TensorDescriptor) == 8);
-    CHECK(kWireVersion == 1);
+    CHECK(kWireVersion == 2);                  // v2: imaging/depth metadata
+}
+
+DCZC_TEST(v2_depth_metadata_roundtrip) {
+    // A padded U16 depth frame: row_pitch > packed row width.
+    TensorDescriptor d {};
+    d.rank = 2;
+    d.shape[0] = 240;      // H
+    d.shape[1] = 316;      // W  (packed row = 632 bytes)
+    d.dtype = DType::U16;
+    d.row_pitch = 640;     // padded to 640
+    d.depth_scale = 0.001f;
+    d.invalid_value = 0;
+    d.sample_units = SampleUnits::Millimeters;
+    d.capture_clock = CaptureClock::MonotonicRaw;
+    d.layout = TensorLayout::HW;
+    d.offset = 0;
+    d.size = 640ull * 240;  // image_bytes with padding
+
+    CHECK(detail::row_stride_bytes(d) == 640);
+    CHECK(detail::image_bytes(d) == 640ull * 240);
+    CHECK(detail::implied_bytes(d) == 240ull * 316 * 2);  // packed, ignores pitch
+    CHECK(detail::descriptor_is_valid(d, 640ull * 240));
+
+    // pitch smaller than a packed row is invalid.
+    d.row_pitch = 600;
+    CHECK(!detail::descriptor_is_valid(d, 640ull * 240));
+
+    // size that doesn't cover the padded footprint is invalid.
+    d.row_pitch = 640;
+    d.size = 632ull * 240;   // < image_bytes(640*240)
+    CHECK(!detail::descriptor_is_valid(d, 640ull * 240));
 }
 
 DCZC_TEST(dtype_sizes) {

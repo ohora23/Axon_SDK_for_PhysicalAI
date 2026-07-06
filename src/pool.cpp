@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — TensorPool: dma-buf-backed buffer pool (design doc §4.1)
+// axon — TensorPool: dma-buf-backed buffer pool (design doc §4.1)
 //
 // Backends:
 //   Custom  — memfd-backed buffers. Dependency-free, always available; the FDs
@@ -12,7 +12,7 @@
 //   V4L2    — VIDIOC_REQBUFS + VIDIOC_EXPBUF, ported from the week 1-2 spike.
 //             Requires a capture device.
 
-#include "dczc/pool.h"
+#include "axon/pool.h"
 
 #include <cerrno>
 #include <cstring>
@@ -25,7 +25,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-namespace dczc {
+namespace axon {
 
 namespace {
 
@@ -44,7 +44,7 @@ struct Buffer {
 };
 
 int make_sealed_memfd(std::size_t size) {
-    int fd = memfd_create("dczc_buf", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+    int fd = memfd_create("axon_buf", MFD_CLOEXEC | MFD_ALLOW_SEALING);
     if (fd < 0) return -1;
     if (ftruncate(fd, static_cast<off_t>(size)) < 0) {
         ::close(fd);
@@ -223,4 +223,4 @@ void TensorPool::retire_and_reallocate(std::size_t new_buffer_size) {
     impl_->allocate();
 }
 
-}  // namespace dczc
+}  // namespace axon

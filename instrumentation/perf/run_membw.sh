@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # run_membw.sh — "copies aren't free": measure the memory-subsystem cost of the
-# same MockSystem workload on dczc vs ROS2. ROS2 serializes+copies each payload
-# (both sides), which burns cache and memory bandwidth; dczc keeps the tensor in
+# same MockSystem workload on axon vs ROS2. ROS2 serializes+copies each payload
+# (both sides), which burns cache and memory bandwidth; axon keeps the tensor in
 # a shared dma-buf, so the RT loop touches only descriptors.
 #
 # Counters: cache-references, cache-misses, LLC-loads/misses, instructions,
@@ -25,17 +25,17 @@ EVENTS="cache-references,cache-misses,LLC-loads,LLC-load-misses,context-switches
 
 echo "MockSystem memory-subsystem cost — scale ${SCALE}, ${SECS}s, bounded to 6 cores\n"
 
-echo "########## dczc ##########"
-$PERF stat -e "$EVENTS" -- env PYTHONPATH="$MOD" DCZC_CORES=0-5 DCZC_TIMEOUT=$((SECS+15)) \
-    "$BOUND" python3 "${REPO}/benchmarks/mock/mock_dczc.py" --scale "$SCALE" --seconds "$SECS" \
-    2>&1 | grep -iE "cache|LLC|context-switches|instructions|seconds time" | grep -v "mock_dczc"
+echo "########## axon ##########"
+$PERF stat -e "$EVENTS" -- env PYTHONPATH="$MOD" AXON_CORES=0-5 AXON_TIMEOUT=$((SECS+15)) \
+    "$BOUND" python3 "${REPO}/benchmarks/mock/mock_axon.py" --scale "$SCALE" --seconds "$SECS" \
+    2>&1 | grep -iE "cache|LLC|context-switches|instructions|seconds time" | grep -v "mock_axon"
 echo
 
 ROS2_SETUP="$(ls /opt/ros/*/setup.bash 2>/dev/null | head -1)"
 if [ -n "$ROS2_SETUP" ]; then
     echo "########## ROS2 (Fast-RTPS) ##########"
     $PERF stat -e "$EVENTS" -- bash -lc \
-        "source ${ROS2_SETUP} && DCZC_CORES=0-5 DCZC_TIMEOUT=$((SECS+15)) ${BOUND} \
+        "source ${ROS2_SETUP} && AXON_CORES=0-5 AXON_TIMEOUT=$((SECS+15)) ${BOUND} \
          python3 ${REPO}/benchmarks/mock/mock_ros2.py --scale ${SCALE} --seconds ${SECS}" \
         2>&1 | grep -iE "cache|LLC|context-switches|instructions|seconds time"
 fi

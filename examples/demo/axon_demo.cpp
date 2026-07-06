@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc closed-loop demo + measurement harness
+// axon closed-loop demo + measurement harness
 //
-// Exercises the *public* dczc API the way an application would, with no camera
+// Exercises the *public* axon API the way an application would, with no camera
 // and no accelerator (Custom memfd pool), and reports the metrics the design doc
 // calls for:
 //   - end-to-end staleness distribution         (design doc §5 — bounded staleness)
@@ -14,7 +14,7 @@
 // latest view every tick, records staleness, and verifies the payload came
 // through the shared dma-buf uncopied.
 //
-// Usage: dczc_demo [--frames N] [--rate-hz R] [--buffers B] [--quiet]
+// Usage: axon_demo [--frames N] [--rate-hz R] [--buffers B] [--quiet]
 
 #include <algorithm>
 #include <cstdint>
@@ -28,12 +28,12 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "dczc/pool.h"
-#include "dczc/publisher.h"
-#include "dczc/rt.h"
-#include "dczc/subscriber.h"
+#include "axon/pool.h"
+#include "axon/publisher.h"
+#include "axon/rt.h"
+#include "axon/subscriber.h"
 
-using namespace dczc;
+using namespace axon;
 
 namespace {
 
@@ -141,7 +141,7 @@ int run_consumer(const Config& cfg) {
     Stats rt_st = summarize(retries);
 
     if (!cfg.quiet) {
-        std::fprintf(stderr, "\n─────────── dczc demo — measurement report ───────────\n");
+        std::fprintf(stderr, "\n─────────── axon demo — measurement report ───────────\n");
         std::fprintf(stderr, "  frames streamed:       %d @ %d Hz\n", cfg.frames, cfg.rate_hz);
         std::fprintf(stderr, "  distinct frames seen:  %lu\n", (unsigned long)distinct);
         std::fprintf(stderr, "  final seqno observed:  %lu\n", (unsigned long)last_seqno);

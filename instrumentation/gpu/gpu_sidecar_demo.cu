@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc GPU sidecar demo — real-hardware zero-copy across processes.
+// axon GPU sidecar demo — real-hardware zero-copy across processes.
 //
-// Proves that dczc's FD sidecar (the ① FD plane) carries a *GPU memory handle*
+// Proves that axon's FD sidecar (the ① FD plane) carries a *GPU memory handle*
 // between processes, so a consumer's GPU reads a producer's GPU-written tensor
 // with no host staging copy (design doc §2.3: bo_handle -> GPU memory handle).
 //
 // Path: producer allocates CUDA VMM memory, a kernel fills it, the allocation is
-// exported as a POSIX shareable FD, and that FD is delivered through dczc's
-// SCM_RIGHTS sidecar (dczc::detail::send_fds). The consumer imports the same
+// exported as a POSIX shareable FD, and that FD is delivered through axon's
+// SCM_RIGHTS sidecar (axon::detail::send_fds). The consumer imports the same
 // physical GPU memory and a kernel verifies the payload — the tensor never
 // leaves the GPU; only a 32-byte commit record is copied (for sync), never the
 // payload.
@@ -25,7 +25,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "dczc/detail/sidecar.h"
+#include "axon/detail/sidecar.h"
 
 #define CKC(x) do { CUresult r=(x); if(r!=CUDA_SUCCESS){ const char*s; cuGetErrorString(r,&s); \
     fprintf(stderr,"CUDA drv FAIL %s: %s\n",#x,s); _exit(40);} } while(0)
@@ -98,13 +98,13 @@ int run_producer(int sock, uint64_t n_elems, int gens) {
     CUdeviceptr commit = vmm_alloc(sizeof(Commit), &commit_h, &csz);
 
     // Export both handles as POSIX FDs and hand them to the consumer through the
-    // dczc SCM_RIGHTS sidecar.
+    // axon SCM_RIGHTS sidecar.
     int pfd = -1, cfd = -1;
     CKC(cuMemExportToShareableHandle(&pfd, payload_h, CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR, 0));
     CKC(cuMemExportToShareableHandle(&cfd, commit_h, CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR, 0));
     int fds[2] = {pfd, cfd};
     FdMeta meta{n_elems, bytes};
-    if (dczc::detail::send_fds(sock, fds, 2, &meta, sizeof(meta)) != 0) {
+    if (axon::detail::send_fds(sock, fds, 2, &meta, sizeof(meta)) != 0) {
         perror("send_fds"); return 30;
     }
 
@@ -134,10 +134,10 @@ int run_consumer(int sock, int gens) {
     CKR(cudaSetDevice(0));
     CKR(cudaFree(0));
 
-    int fds[dczc::detail::kMaxSidecarFds];
+    int fds[axon::detail::kMaxSidecarFds];
     int n = 0;
     FdMeta meta{};
-    if (dczc::detail::recv_fds(sock, fds, dczc::detail::kMaxSidecarFds, &n, &meta, sizeof(meta)) != 0
+    if (axon::detail::recv_fds(sock, fds, axon::detail::kMaxSidecarFds, &n, &meta, sizeof(meta)) != 0
         || n != 2) {
         fprintf(stderr, "consumer: recv_fds failed (n=%d)\n", n); return 31;
     }
@@ -196,7 +196,7 @@ int run_consumer(int sock, int gens) {
     }
 
     double gb = (double)meta.bytes * validated / 1e9;
-    printf("\n────── dczc GPU sidecar demo (RTX 5080, real hardware) ──────\n");
+    printf("\n────── axon GPU sidecar demo (RTX 5080, real hardware) ──────\n");
     printf("  payload per frame:   %.2f MB  (%llu x uint64)\n",
            meta.bytes / 1e6, (unsigned long long)meta.n_elems);
     printf("  frames validated:    %d / %d   (on-GPU checksum)\n", validated, gens);
@@ -205,7 +205,7 @@ int run_consumer(int sock, int gens) {
     printf("  GPU data moved zero-copy: %.2f GB across the process boundary\n", gb);
     if (validated) printf("  commit->verify latency: mean=%.1fus max=%.1fus\n",
                           (lat_sum / (double)validated) / 1e3, lat_max / 1e3);
-    printf("  FD transport: dczc::detail::send_fds / recv_fds (SCM_RIGHTS sidecar)\n");
+    printf("  FD transport: axon::detail::send_fds / recv_fds (SCM_RIGHTS sidecar)\n");
     printf("─────────────────────────────────────────────────────────────\n");
 
     char ack = 1; (void)write(sock, &ack, 1);
@@ -223,7 +223,7 @@ int main(int argc, char** argv) {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) { perror("socketpair"); return 1; }
 
-    fprintf(stderr, "dczc GPU demo: %llu MB/frame x %d frames, FD via dczc sidecar\n",
+    fprintf(stderr, "axon GPU demo: %llu MB/frame x %d frames, FD via axon sidecar\n",
             (unsigned long long)mb, gens);
 
     pid_t pid = fork();

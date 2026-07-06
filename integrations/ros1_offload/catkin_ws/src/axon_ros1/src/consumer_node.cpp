@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc ROS1 offload — consumer node.
+// axon ROS1 offload — consumer node.
 //
-// Receives the pool dma-buf FDs ONCE via the dczc SCM_RIGHTS sidecar and mmaps
+// Receives the pool dma-buf FDs ONCE via the axon SCM_RIGHTS sidecar and mmaps
 // them. Then, for every TensorDescriptor that arrives on the ROS1 topic, it
 // reads the payload straight from the shared buffer (zero copy) and checks the
 // seqno the producer stamped there. Also demonstrates the ROS pattern this
@@ -17,9 +17,9 @@
 
 #include <ros/ros.h>
 
-#include "dczc/rt.h"
-#include "dczc/detail/sidecar.h"
-#include "dczc_ros1/TensorDescriptor.h"
+#include "axon/rt.h"
+#include "axon/detail/sidecar.h"
+#include "axon_ros1/TensorDescriptor.h"
 
 namespace {
 std::vector<void*> g_views;
@@ -29,7 +29,7 @@ std::atomic<uint64_t> g_last_seen{0};
 uint64_t g_frames = 0, g_payload_errors = 0;
 uint64_t g_stale_sum_us = 0, g_stale_max_us = 0;
 
-void on_desc(const dczc_ros1::TensorDescriptor::ConstPtr& msg) {
+void on_desc(const axon_ros1::TensorDescriptor::ConstPtr& msg) {
     g_last_seen.store(msg->seqno, std::memory_order_relaxed);
 
     if (msg->pool_generation != g_pool_generation) {
@@ -45,7 +45,7 @@ void on_desc(const dczc_ros1::TensorDescriptor::ConstPtr& msg) {
     std::memcpy(&stamped, base, sizeof(stamped));
     if (stamped != msg->seqno) ++g_payload_errors;
 
-    uint64_t staleness_us = (dczc::rt_now_ns() - msg->producer_publish_ts_ns) / 1000;
+    uint64_t staleness_us = (axon::rt_now_ns() - msg->producer_publish_ts_ns) / 1000;
     g_stale_sum_us += staleness_us;
     if (staleness_us > g_stale_max_us) g_stale_max_us = staleness_us;
     ++g_frames;
@@ -57,17 +57,17 @@ void on_desc(const dczc_ros1::TensorDescriptor::ConstPtr& msg) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    ros::init(argc, argv, "dczc_consumer");
+    ros::init(argc, argv, "axon_consumer");
     ros::NodeHandle nh("~");
     std::string service = nh.param<std::string>("service", "ros1_offload");
     double watchdog_s = nh.param("watchdog_s", 0.5);
 
-    // dczc FD plane: connect the sidecar and receive the pool FDs once.
-    auto* client = dczc::detail::SidecarClient::create(service);
+    // axon FD plane: connect the sidecar and receive the pool FDs once.
+    auto* client = axon::detail::SidecarClient::create(service);
     if (!client || client->connect(10000) != 0) {
         ROS_FATAL("sidecar connect failed (is the producer up?)"); return 1;
     }
-    dczc::detail::PoolHandshakeHeader hdr{};
+    axon::detail::PoolHandshakeHeader hdr{};
     std::vector<int> fds;
     if (client->recv_pool_handshake(&hdr, &fds, 10000) != 0) {
         ROS_FATAL("sidecar pool handshake failed"); return 1;
@@ -83,7 +83,7 @@ int main(int argc, char** argv) {
     ROS_INFO("sidecar handshake: %zu dma-buf FDs, %lu B each, pool_gen=%u — attached.",
              fds.size(), g_buffer_size, g_pool_generation);
 
-    ros::Subscriber sub = nh.subscribe("/dczc/tensor_desc", 50, on_desc);
+    ros::Subscriber sub = nh.subscribe("/axon/tensor_desc", 50, on_desc);
 
     // Watchdog on the descriptor topic — exactly the ROS pattern that keeps
     // working because descriptors still flow at full rate.
@@ -102,7 +102,7 @@ int main(int argc, char** argv) {
 
     // Use stdout (ROS_INFO is suppressed after shutdown) so the summary always prints.
     if (g_frames) {
-        std::printf("\n────── dczc ROS1 offload — consumer summary ──────\n"
+        std::printf("\n────── axon ROS1 offload — consumer summary ──────\n"
                     "  frames read:      %lu\n"
                     "  payload errors:   %lu   (must be 0 — cross-process zero-copy)\n"
                     "  staleness:        mean=%luus  max=%luus\n"

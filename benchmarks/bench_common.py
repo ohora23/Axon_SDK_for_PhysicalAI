@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Shared helpers for the dczc vs ROS2 latency benchmarks (design doc §8.2).
+"""Shared helpers for the axon vs ROS2 latency benchmarks (design doc §8.2).
 
 All benchmarks measure one-way, publish->observe latency using CLOCK_MONOTONIC_RAW
 stamped into the first bytes of the payload, so the numbers are directly

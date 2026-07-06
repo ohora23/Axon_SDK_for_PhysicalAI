@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — TensorSubscriber: reads metadata from Iceoryx2 + attaches FDs from the sidecar.
+// axon — TensorSubscriber: reads metadata from Iceoryx2 + attaches FDs from the sidecar.
 //
 // The RT consumer only calls latest_view(); attach and lifecycle are handled
 // on the non-RT side.
@@ -9,10 +9,10 @@
 #include <memory>
 #include <optional>
 #include <string_view>
-#include "dczc/tensor_descriptor.h"
-#include "dczc/types.h"
+#include "axon/tensor_descriptor.h"
+#include "axon/types.h"
 
-namespace dczc {
+namespace axon {
 
 struct TensorView {
     void*             data;          // dma-buf host mmap region (UMA)
@@ -71,4 +71,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace dczc
+}  // namespace axon

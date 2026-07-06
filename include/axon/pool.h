@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — TensorPool: dma-buf-backed buffer pool
+// axon — TensorPool: dma-buf-backed buffer pool
 //
 // The producer pre-allocates N buffers at startup; capture, inference, and
 // publish all acquire/release from the same pool. On retire, pool_generation
@@ -10,9 +10,9 @@
 #include <cstddef>
 #include <memory>
 #include <vector>
-#include "dczc/types.h"
+#include "axon/types.h"
 
-namespace dczc {
+namespace axon {
 
 struct TensorPoolConfig {
     std::size_t n_buffers;     // Ring size (worst_case_inference_ms × rate × safety)
@@ -60,4 +60,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace dczc
+}  // namespace axon

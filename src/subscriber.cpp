@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — TensorSubscriber (design doc §1.1.3 / §3.3 / §3.5)
+// axon — TensorSubscriber (design doc §1.1.3 / §3.3 / §3.5)
 //
 // wait_handshake() runs on the non-RT side: it connects to the sidecar, receives
 // every dma-buf FD, and mmaps each one (accelerator import is deferred). The RT
 // loop then calls latest_view(), which is a pure seqlock read with no syscalls
 // and no allocation — the FDs are already attached and prefaulted.
 
-#include "dczc/subscriber.h"
+#include "axon/subscriber.h"
 
 #include <cstring>
 #include <string>
@@ -15,12 +15,12 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include "dczc/detail/descriptor_util.h"
-#include "dczc/detail/metadata_channel.h"
-#include "dczc/detail/sidecar.h"
-#include "dczc/rt.h"
+#include "axon/detail/descriptor_util.h"
+#include "axon/detail/metadata_channel.h"
+#include "axon/detail/sidecar.h"
+#include "axon/rt.h"
 
-namespace dczc {
+namespace axon {
 
 struct TensorSubscriber::Impl {
     std::string service_name;
@@ -192,4 +192,4 @@ std::uint64_t TensorSubscriber::fallback_invocation_count() const noexcept {
     return impl_->fallback_count;
 }
 
-}  // namespace dczc
+}  // namespace axon

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""End-to-end test of the dczc Python bindings.
+"""End-to-end test of the axon Python bindings.
 
 Mirrors tests/test_end_to_end.cpp: a producer process streams NumPy frames to a
 forked RT-consumer process over the real sidecar + seqlock + dma-buf pool. The
 consumer reads a zero-copy NumPy view and checks the seqno stamped into the
 buffer — matching bytes prove the data crossed the process boundary uncopied.
 
-Run standalone (PYTHONPATH must point at the built dczc module):
-    PYTHONPATH=build/python python3 python/tests/test_dczc.py
+Run standalone (PYTHONPATH must point at the built axon module):
+    PYTHONPATH=build/python python3 python/tests/test_axon.py
 """
 
 import os
@@ -17,7 +17,7 @@ import time
 
 import numpy as np
 
-import dczc
+import axon
 
 SERVICE = "pytest/tensor_stream"
 N_BUFFERS = 8
@@ -35,8 +35,8 @@ def make_frame(seqno: int) -> np.ndarray:
 
 
 def run_consumer() -> int:
-    sub = dczc.TensorSubscriber.create(SERVICE)
-    sub.set_fallback_policy(dczc.FallbackPolicy.LastKnownGood)
+    sub = axon.TensorSubscriber.create(SERVICE)
+    sub.set_fallback_policy(axon.FallbackPolicy.LastKnownGood)
     if sub.wait_handshake(5000) != 0:
         print("consumer: handshake failed", file=sys.stderr)
         return 11
@@ -75,14 +75,14 @@ def run_consumer() -> int:
 
 
 def run_producer(child_pid: int) -> int:
-    pool = dczc.TensorPool.create(
-        n_buffers=N_BUFFERS, buffer_size=BUF_BYTES, backend=dczc.PoolBackend.Custom
+    pool = axon.TensorPool.create(
+        n_buffers=N_BUFFERS, buffer_size=BUF_BYTES, backend=axon.PoolBackend.Custom
     )
-    pub = dczc.TensorPublisher.create(SERVICE, pool)
+    pub = axon.TensorPublisher.create(SERVICE, pool)
     pub.handshake_pool()
 
     for s in range(1, FINAL_SEQNO + 1):
-        pub.publish(make_frame(s), dczc.DType.U8)
+        pub.publish(make_frame(s), axon.DType.U8)
         time.sleep(0.001)
 
     _, status = os.waitpid(child_pid, 0)
@@ -91,8 +91,8 @@ def run_producer(child_pid: int) -> int:
 
 def main() -> int:
     # Basic smoke of the module surface before the fork.
-    assert dczc.rt_now_ns() > 0
-    pool = dczc.TensorPool.create(n_buffers=4, buffer_size=4096)
+    assert axon.rt_now_ns() > 0
+    pool = axon.TensorPool.create(n_buffers=4, buffer_size=4096)
     assert pool.generation() == 1
     assert pool.buffer_count() == 4
     del pool
@@ -103,9 +103,9 @@ def main() -> int:
 
     rc = run_producer(pid)
     if rc == 0:
-        print("dczc python binding e2e: PASS")
+        print("axon python binding e2e: PASS")
     else:
-        print(f"dczc python binding e2e: FAIL (consumer rc={rc})", file=sys.stderr)
+        print(f"axon python binding e2e: FAIL (consumer rc={rc})", file=sys.stderr)
     return rc
 
 

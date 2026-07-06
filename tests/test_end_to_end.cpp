@@ -7,11 +7,11 @@
 // reads it back through its own mmap of the *same* dma-buf. Matching bytes prove
 // the data never left the shared buffer.
 
-#include "dczc/pool.h"
-#include "dczc/publisher.h"
-#include "dczc/subscriber.h"
-#include "dczc/rt.h"
-#include "dczc_test.h"
+#include "axon/pool.h"
+#include "axon/publisher.h"
+#include "axon/subscriber.h"
+#include "axon/rt.h"
+#include "axon_test.h"
 
 #include <cstdint>
 #include <cstring>
@@ -20,7 +20,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-using namespace dczc;
+using namespace axon;
 
 namespace {
 
@@ -69,7 +69,7 @@ int run_consumer() {
 
 }  // namespace
 
-DCZC_TEST(producer_consumer_zero_copy_stream) {
+AXON_TEST(producer_consumer_zero_copy_stream) {
     auto pool = TensorPool::create(
         TensorPoolConfig{kNBuffers, kBufBytes, PoolBackend::Custom, nullptr});
     REQUIRE(pool != nullptr);
@@ -118,7 +118,7 @@ DCZC_TEST(producer_consumer_zero_copy_stream) {
     CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
-DCZC_TEST(late_joiner_gets_pool) {
+AXON_TEST(late_joiner_gets_pool) {
     // A subscriber that connects after streaming has begun still receives the
     // pool bundle via publish()'s non-blocking accept.
     auto pool = TensorPool::create(
@@ -151,4 +151,4 @@ DCZC_TEST(late_joiner_gets_pool) {
     CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
-DCZC_TEST_MAIN("e2e")
+AXON_TEST_MAIN("e2e")

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc Spike PoC — producer
+// axon Spike PoC — producer
 //   (V4L2 capture + dma-buf export + SCM_RIGHTS sidecar)
 //
 // Validation items for week 1-2 (design doc §6.4):
@@ -28,7 +28,7 @@
 #include <unistd.h>
 
 #define N_BUFFERS       4
-#define SOCKET_PATH     "/tmp/dczc_spike.sock"
+#define SOCKET_PATH     "/tmp/axon_spike.sock"
 #define POOL_GENERATION 1
 #define WIRE_VERSION    1
 

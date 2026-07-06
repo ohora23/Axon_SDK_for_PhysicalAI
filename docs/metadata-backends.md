@@ -1,8 +1,8 @@
 # Metadata-plane backends
 
 The metadata plane (design doc §1.1) is the lock-free channel that carries the
-fixed-size `TensorDescriptor` between producer and RT consumer. `dczc` exposes it
-behind an abstract interface (`dczc::detail::MetadataChannel`) with two
+fixed-size `TensorDescriptor` between producer and RT consumer. `axon` exposes it
+behind an abstract interface (`axon::detail::MetadataChannel`) with two
 interchangeable backends. This is the design-doc promise — swapping in Iceoryx2
 "changes only this file" — made concrete.
 
@@ -16,9 +16,9 @@ exactly what the RT consumer's `latest_view()` needs.
 
 ## Selecting a backend
 
-- **Compile time:** `-DDCZC_WITH_ICEORYX2=ON` compiles the Iceoryx2 backend in
+- **Compile time:** `-DAXON_WITH_ICEORYX2=ON` compiles the Iceoryx2 backend in
   (otherwise only the seqlock backend exists).
-- **Run time:** `DCZC_METADATA_BACKEND=seqlock|iceoryx2` (only meaningful when
+- **Run time:** `AXON_METADATA_BACKEND=seqlock|iceoryx2` (only meaningful when
   Iceoryx2 was compiled in). Default is `iceoryx2` when available. If Iceoryx2
   initialization fails, the factory falls back to the always-available seqlock
   backend.
@@ -35,10 +35,10 @@ cmake -S iceoryx2 -B iceoryx2/build -DBUILD_CXX=ON -DBUILD_EXAMPLES=OFF \
 cmake --build iceoryx2/build --target install -j
 ```
 
-Then build `dczc` against it:
+Then build `axon` against it:
 
 ```bash
-cmake -S . -B build -DDCZC_WITH_ICEORYX2=ON -DCMAKE_PREFIX_PATH=/opt/iceoryx2
+cmake -S . -B build -DAXON_WITH_ICEORYX2=ON -DCMAKE_PREFIX_PATH=/opt/iceoryx2
 cmake --build build -j
 (cd build && ctest --output-on-failure)
 ```

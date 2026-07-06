@@ -4,9 +4,9 @@
 Instead of one synthetic stream, this models the concurrent sensor traffic of a
 serving/mobile robot (Bear Robotics Servi/Penny class): several RGBD cameras, a
 2D LiDAR, plus high-rate proprioception (IMU, odometry, control). The point is to
-generate realistic *aggregate bandwidth* and watch how each transport (dczc vs
+generate realistic *aggregate bandwidth* and watch how each transport (axon vs
 ROS2/DDS) behaves as that bandwidth scales — where DDS saturates on
-serialization+copy while dczc stays flat because only descriptors cross the
+serialization+copy while axon stays flat because only descriptors cross the
 metadata plane.
 
 Profile numbers are a representative default (not any proprietary spec) and are

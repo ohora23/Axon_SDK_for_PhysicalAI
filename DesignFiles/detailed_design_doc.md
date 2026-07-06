@@ -518,7 +518,7 @@ staleness_worst_case =
 ### 7.1 C++ Core API
 
 ```cpp
-namespace dczc {  // data-centric zero-copy
+namespace axon {  // data-centric zero-copy
 
 class TensorPool {
 public:
@@ -555,17 +555,17 @@ struct TensorView {
     uint64_t seqno;
 };
 
-}  // namespace dczc
+}  // namespace axon
 ```
 
 ### 7.2 Python Bindings (pybind11, Phase 1)
 
 ```python
-import dczc
+import axon
 
-pool = dczc.TensorPool.create(n_buffers=32, buffer_size=4 * 1024 * 1024,
-                              backend=dczc.PoolBackend.V4L2)
-pub = dczc.TensorPublisher.create("camera/inference_out", pool)
+pool = axon.TensorPool.create(n_buffers=32, buffer_size=4 * 1024 * 1024,
+                              backend=axon.PoolBackend.V4L2)
+pub = axon.TensorPublisher.create("camera/inference_out", pool)
 pub.handshake_pool()
 
 while True:

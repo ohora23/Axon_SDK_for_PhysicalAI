@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""MockSystem comparison + saturation sweep: dczc vs ROS2.
+"""MockSystem comparison + saturation sweep: axon vs ROS2.
 
 Runs the same multi-stream serving-robot workload through both transports at
 increasing scale (more camera streams = more aggregate bandwidth) and tabulates
@@ -26,7 +26,7 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 def find_module_dir() -> str | None:
     for pat in ("build/python", "build*/python"):
         for d in glob.glob(os.path.join(REPO, pat)):
-            if glob.glob(os.path.join(d, "dczc*.so")):
+            if glob.glob(os.path.join(d, "axon*.so")):
                 return d
     return None
 
@@ -53,12 +53,12 @@ def run_json(cmd, env, label: str) -> dict | None:
     return json.loads(lines[-1])
 
 
-def run_dczc(scale: int, seconds: float, mod: str) -> dict | None:
+def run_axon(scale: int, seconds: float, mod: str) -> dict | None:
     env = dict(os.environ)
     env["PYTHONPATH"] = mod + os.pathsep + env.get("PYTHONPATH", "")
-    return run_json([sys.executable, os.path.join(HERE, "mock_dczc.py"),
+    return run_json([sys.executable, os.path.join(HERE, "mock_axon.py"),
                      "--scale", str(scale), "--seconds", str(seconds)],
-                    env, f"dczc s{scale}")
+                    env, f"axon s{scale}")
 
 
 def run_ros2(scale: int, seconds: float, setup: str) -> dict | None:
@@ -76,7 +76,7 @@ def heavy_latency(agg: dict) -> tuple[float, float]:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="MockSystem dczc vs ROS2 sweep")
+    p = argparse.ArgumentParser(description="MockSystem axon vs ROS2 sweep")
     p.add_argument("--scales", type=str, default="1,2,3,4")
     p.add_argument("--seconds", type=float, default=5.0)
     args = p.parse_args()
@@ -85,9 +85,9 @@ def main() -> int:
     mod = find_module_dir()
     setup = find_ros_setup()
     if not mod:
-        print("dczc module not found — build -DDCZC_BUILD_PYTHON=ON", file=sys.stderr)
+        print("axon module not found — build -DAXON_BUILD_PYTHON=ON", file=sys.stderr)
     if not setup:
-        print("ROS2 not found — dczc-only run", file=sys.stderr)
+        print("ROS2 not found — axon-only run", file=sys.stderr)
 
     print(f"\nMockSystem sweep — serving-robot profile, {args.seconds:.0f}s per point")
     print("cam streams scale with the knob; proprioception (imu/odom/cmd) fixed.\n")
@@ -102,11 +102,11 @@ def main() -> int:
     for scale in scales:
         results = {}
         if mod:
-            results["dczc"] = run_dczc(scale, args.seconds, mod)
+            results["axon"] = run_axon(scale, args.seconds, mod)
         if setup:
             results["ros2"] = run_ros2(scale, args.seconds, setup)
 
-        for key in ("dczc", "ros2"):
+        for key in ("axon", "ros2"):
             a = results.get(key)
             if not a:
                 continue
@@ -123,14 +123,14 @@ def main() -> int:
     sat = next((s for s, a in ros2_rows if a["delivery_worst_stream"] < 0.98), None)
     if sat is not None:
         print(f"ROS2 starts dropping frames (worst-stream delivery < 0.98) at scale {sat}.")
-    dczc_rows = [(s, a) for s, k, a in rows if k == "dczc"]
-    if dczc_rows and ros2_rows:
-        smax = max(s for s, _ in dczc_rows)
-        d = next(a for s, a in dczc_rows if s == smax)
+    axon_rows = [(s, a) for s, k, a in rows if k == "axon"]
+    if axon_rows and ros2_rows:
+        smax = max(s for s, _ in axon_rows)
+        d = next(a for s, a in axon_rows if s == smax)
         r = next((a for s, a in ros2_rows if s == smax), None)
         if r and d["cpu_util_cores"] > 0:
             print(f"At scale {smax}: ROS2 uses {r['cpu_util_cores']/d['cpu_util_cores']:.1f}x "
-                  f"the CPU of dczc for the same workload.")
+                  f"the CPU of axon for the same workload.")
     return 0
 
 

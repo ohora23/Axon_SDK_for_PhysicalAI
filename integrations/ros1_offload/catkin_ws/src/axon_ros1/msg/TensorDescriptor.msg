@@ -1,5 +1,5 @@
-# dczc ROS1 offload — metadata-only descriptor.
-# The payload stays in a shared dma-buf delivered via the dczc SCM_RIGHTS
+# axon ROS1 offload — metadata-only descriptor.
+# The payload stays in a shared dma-buf delivered via the axon SCM_RIGHTS
 # sidecar; only this fixed-size descriptor travels on the ROS1 topic, so
 # rostopic/rosbag/watchdogs keep working while the tensor moves zero-copy.
 uint64 bo_handle              # pool buffer index the payload lives in
@@ -9,6 +9,6 @@ uint64 capture_ts_ns          # sensor timestamp (here: producer stamp)
 uint64 producer_publish_ts_ns # CLOCK_MONOTONIC_RAW just before publish
 uint32[] shape                # tensor shape
 uint8 rank
-uint8 dtype                   # dczc::DType enum value
+uint8 dtype                   # axon::DType enum value
 uint64 offset                 # byte offset into the dma-buf
 uint64 size                   # tensor size in bytes

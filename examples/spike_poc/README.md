@@ -22,7 +22,7 @@ cmake --build ../../build/spike -j
 
 From the repo root:
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDCZC_BUILD_EXAMPLES=ON
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DAXON_BUILD_EXAMPLES=ON
 cmake --build build -j
 ```
 
@@ -40,7 +40,7 @@ v4l2-ctl -d /dev/video0 --list-formats-ext # list supported formats
 
 **Terminal A — producer:**
 ```bash
-./build/spike/dczc_spike_producer /dev/video0
+./build/spike/axon_spike_producer /dev/video0
 ```
 Sample output:
 ```
@@ -48,12 +48,12 @@ V4L2 format: 640x480 (614400 bytes/frame)
 ✓ buffer 0 → dma-buf FD 5
 ✓ buffer 1 → dma-buf FD 6
 ...
-✓ listening on /tmp/dczc_spike.sock — waiting for consumer
+✓ listening on /tmp/axon_spike.sock — waiting for consumer
 ```
 
 **Terminal B — consumer:**
 ```bash
-./build/spike/dczc_spike_consumer
+./build/spike/axon_spike_consumer
 ```
 Sample output:
 ```
@@ -110,5 +110,5 @@ This is **policy, not a bug**, and we still treat the spike as passing — full 
 ## Cleanup
 
 ```bash
-rm -f /tmp/dczc_spike.sock
+rm -f /tmp/axon_spike.sock
 ```

@@ -5,16 +5,16 @@
 // read must observe a self-consistent descriptor (seqno matches the encoded
 // payload). Torn reads would show up as a mismatch.
 
-#include "dczc/detail/metadata_channel.h"
-#include "dczc/tensor_descriptor.h"
-#include "dczc_test.h"
+#include "axon/detail/metadata_channel.h"
+#include "axon/tensor_descriptor.h"
+#include "axon_test.h"
 
 #include <atomic>
 #include <cstdlib>
 #include <thread>
 
-using namespace dczc;
-using namespace dczc::detail;
+using namespace axon;
+using namespace axon::detail;
 
 namespace {
 // Encode seqno redundantly into several fields so a torn read is detectable.
@@ -39,7 +39,7 @@ bool consistent(const TensorDescriptor& d) {
 }
 }  // namespace
 
-DCZC_TEST(basic_publish_read) {
+AXON_TEST(basic_publish_read) {
     const char* svc = "test_seqlock_basic";
     auto* pub = MetadataChannel::create_publisher(svc);
     REQUIRE(pub != nullptr);
@@ -61,7 +61,7 @@ DCZC_TEST(basic_publish_read) {
     delete pub;
 }
 
-DCZC_TEST(latest_value_wins) {
+AXON_TEST(latest_value_wins) {
     const char* svc = "test_seqlock_latest";
     auto* pub = MetadataChannel::create_publisher(svc);
     REQUIRE(pub != nullptr);
@@ -80,7 +80,7 @@ DCZC_TEST(latest_value_wins) {
     delete pub;
 }
 
-DCZC_TEST(concurrent_no_torn_reads) {
+AXON_TEST(concurrent_no_torn_reads) {
     const char* svc = "test_seqlock_concurrent";
     auto* pub = MetadataChannel::create_publisher(svc);
     REQUIRE(pub != nullptr);
@@ -124,6 +124,6 @@ DCZC_TEST(concurrent_no_torn_reads) {
 // This suite validates the seqlock backend specifically (torn-read semantics),
 // so pin the backend even when the library is built with Iceoryx2 enabled.
 int main() {
-    setenv("DCZC_METADATA_BACKEND", "seqlock", 1);
-    return ::dczc_test::run_all("seqlock");
+    setenv("AXON_METADATA_BACKEND", "seqlock", 1);
+    return ::axon_test::run_all("seqlock");
 }

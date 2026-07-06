@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — TensorDescriptor helpers (internal)
+// axon — TensorDescriptor helpers (internal)
 //
 // Validation and convenience routines kept out of the public POD header so the
 // wire struct stays a dependency-free POD.
 
 #pragma once
 
-#include "dczc/tensor_descriptor.h"
-#include "dczc/types.h"
+#include "axon/tensor_descriptor.h"
+#include "axon/types.h"
 
-namespace dczc::detail {
+namespace axon::detail {
 
 // Zero a descriptor to a well-defined empty state.
 inline void clear_descriptor(TensorDescriptor* d) noexcept {
@@ -64,4 +64,4 @@ inline bool descriptor_is_valid(const TensorDescriptor& d,
     return true;
 }
 
-}  // namespace dczc::detail
+}  // namespace axon::detail

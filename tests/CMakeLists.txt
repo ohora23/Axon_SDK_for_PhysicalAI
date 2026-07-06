@@ -1,8 +1,8 @@
 # Week 3-4 formal implementation — unit + end-to-end tests.
-# Dependency-free harness (tests/dczc_test.h); no GTest so the tree builds on a
+# Dependency-free harness (tests/axon_test.h); no GTest so the tree builds on a
 # bare target board. Each executable is registered with ctest.
 
-set(DCZC_TESTS
+set(AXON_TESTS
     test_descriptor
     test_rt
     test_sidecar
@@ -10,9 +10,9 @@ set(DCZC_TESTS
     test_pool
     test_end_to_end)
 
-foreach(t ${DCZC_TESTS})
+foreach(t ${AXON_TESTS})
     add_executable(${t} ${t}.cpp)
-    target_link_libraries(${t} PRIVATE dczc)
+    target_link_libraries(${t} PRIVATE axon)
     target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     add_test(NAME ${t} COMMAND ${t})
 endforeach()

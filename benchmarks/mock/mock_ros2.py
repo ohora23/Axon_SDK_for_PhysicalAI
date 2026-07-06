@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """MockSystem over ROS2: multi-stream pub/sub, all metrics.
 
-Same sensor ensemble as mock_dczc, one ROS2 topic per stream (UInt8MultiArray,
+Same sensor ensemble as mock_axon, one ROS2 topic per stream (UInt8MultiArray,
 sensor-data QoS). The publisher and subscriber are separate spawned processes
 (subprocess, not fork — rclpy is multi-threaded). The subscriber is event-driven
 (a callback per message), the natural ROS2 consumption model.
 
-Emitted JSON matches mock_dczc's schema so mock_compare can tabulate both.
+Emitted JSON matches mock_axon's schema so mock_compare can tabulate both.
 
 Run (ROS2 must be sourced):
     source /opt/ros/jazzy/setup.bash

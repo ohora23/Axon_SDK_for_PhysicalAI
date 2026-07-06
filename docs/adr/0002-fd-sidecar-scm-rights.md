@@ -32,11 +32,11 @@ metadata, so the sidecar cost is amortized to ~0 in steady state. The RT consume
 
 - **Cross-process integrity**: `tests/test_sidecar.cpp` passes an FD across a fork; the same
   kernel object arrives (verified by reading its contents).
-- **Not per-frame**: under the MockSystem load, dczc issued **16 transport syscalls total**
+- **Not per-frame**: under the MockSystem load, axon issued **16 transport syscalls total**
   (8 streams × one handshake `sendmsg`) across ~964 frames — **~0 per frame** — vs ROS2's
   10,187 total (25×).
 - **Carries a real GPU handle**: the RTX 5080 demo exports CUDA VMM memory as a POSIX FD,
-  ships it through `dczc::detail::send_fds`, and the consumer GPU imports the *same physical
+  ships it through `axon::detail::send_fds`, and the consumer GPU imports the *same physical
   memory* — 200/200 frames validated on-GPU, **0 host payload copies**, 1.68 GB moved
   zero-copy across the process boundary.
 

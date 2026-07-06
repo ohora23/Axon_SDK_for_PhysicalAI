@@ -8,6 +8,41 @@
 
 > **Status**: working library + measured results. Core is built and tested (9/9); benchmarks, hardware verification, ROS1/ROS2 integration, and a VLM handoff demo all land on this dev PC (RTX 5080). See [Measured Results](#measured-results) and [docs/hardware-verification.md](docs/hardware-verification.md).
 
+---
+
+## Overview
+
+**What.** `axon` keeps the tensor **payload in a shared dma-buf (or GPU allocation)** and lets every process and accelerator reference it *in place*. Only a fixed-size descriptor (≤256 B) crosses the queue; the buffer's FD is handed over once through an `SCM_RIGHTS` sidecar. In one line: **don't move the payload — leave it where it is and pass a reference.**
+
+**Why.** Physical AI on a robot needs **high bandwidth, ultra-low latency, and RT determinism at the same time**, along the `sensor → accelerator → RT control` path. Standard middleware (ROS2 + DDS) copies each tensor several times per frame, so latency and CPU grow **with payload size** — exactly where robots move the most bytes (4K cameras, point clouds, image embeddings) — and staleness drifts with load, which makes it unusable in safety analysis. Message-level zero-copy (Iceoryx2) gets a message to RAM, but **putting it onto an accelerator copies again**, and the RT freshness guarantee is still missing. `axon` closes both gaps.
+
+One picture says it: **green (the payload) stays in one place; only blue (small metadata) moves.**
+
+```mermaid
+flowchart LR
+    S["📷 Sensor<br/>camera · LiDAR"] --> POOL
+    subgraph BIG[" axon: the payload stays in one place (0 copies) "]
+        POOL[("🔗 Shared dma-buf / GPU pool<br/>raw frames · embeddings · output tensors")]
+    end
+    POOL -->|zero-copy import| INF["🧠 Accelerator inference<br/>GPU / NPU"]
+    INF -->|"output, same plane"| POOL
+    POOL -.->|zero-copy view| RT["⏱️ RT control loop<br/>1kHz · seqlock"]
+    RT --> ACT["🦿 Actuator"]
+
+    S -->|"small descriptor<br/>(≤256B) + FD once"| Q{{"Metadata queue<br/>seqlock / Iceoryx2"}}
+    INF -->|"small descriptor"| Q
+    Q -.->|"staleness · seqno"| RT
+
+    classDef g fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
+    classDef b fill:#bbdefb,stroke:#1565c0,stroke-width:2px
+    class POOL,INF,RT,S g
+    class Q b
+```
+
+Green = payload, referenced in place and never copied. Blue = the only thing that crosses the queue. (The concrete per-stage pipeline is in [Data Flow at a Glance](#data-flow-at-a-glance); the copy-heavy ROS2/DDS path it replaces is the 4-copy chain that path removes.)
+
+**What you get** — transport cost is **O(1) in payload size**, so as bandwidth grows axon CPU stays flat while ROS2/DDS scales with the bytes it copies. Measured on this dev PC:
+
 ### Headline results (measured, RTX 5080 / Ryzen 9800X3D vs ROS2/Fast-RTPS)
 
 | What | Result |
@@ -19,7 +54,7 @@
 | GPU cross-process share | **zero-copy**, 200/200 frames, 1.68 GB |
 | VLM encoder→LLM handoff (video 34 MB) | **36× faster** than a host round-trip |
 
-> Cost is **O(1) in payload size**: only fixed-size descriptors cross the metadata plane; the tensor stays in a shared dma-buf. As bandwidth grows, axon CPU stays flat while ROS2/DDS scales with the payload it copies.
+Full detail in [Measured Results](#measured-results); the staleness guarantee is in [Target Metrics](#target-metrics--and-what-we-measured).
 
 ---
 

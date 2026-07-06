@@ -15,3 +15,8 @@ endif()
 if(IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/depth_filter)
     add_subdirectory(depth_filter)
 endif()
+
+# R6 CUDA accelerator-pool demo — only when the backend is compiled in.
+if(AXON_WITH_CUDA AND IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/accelerator_pool)
+    add_subdirectory(accelerator_pool)
+endif()

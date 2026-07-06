@@ -72,9 +72,10 @@ enum class TensorLayout : std::uint8_t {
 // ---------- Pool backend ----------
 
 enum class PoolBackend : std::uint8_t {
-    V4L2    = 0,  // Export V4L2 capture buffers as dma-bufs (VIDIOC_EXPBUF)
-    UDMABUF = 1,  // Expose user-space buffers as dma-bufs via udmabuf
-    Custom  = 2,  // User-defined (caller injects external dma-buf FDs)
+    V4L2        = 0,  // Export V4L2 capture buffers as dma-bufs (VIDIOC_EXPBUF)
+    UDMABUF     = 1,  // Expose user-space buffers as dma-bufs via udmabuf
+    Custom      = 2,  // User-defined (caller injects external dma-buf FDs)
+    Accelerator = 3,  // CUDA VMM device buffers, POSIX-FD shareable (AXON_WITH_CUDA)
 };
 
 // ---------- Fallback policy ----------

@@ -25,6 +25,10 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#if AXON_WITH_CUDA
+#include "axon/detail/accelerator.h"
+#endif
+
 namespace axon {
 
 namespace {
@@ -39,8 +43,12 @@ std::size_t page_round_up(std::size_t n) {
 // (Custom). For UDMABUF we keep the backing memfd alive for the dma-buf's
 // lifetime.
 struct Buffer {
-    int share_fd = -1;   // FD handed to consumers (dma-buf or memfd)
+    int share_fd = -1;   // FD handed to consumers (dma-buf, memfd, or CUDA export)
     int backing_fd = -1; // memfd kept alive for UDMABUF; -1 otherwise
+    // Accelerator backend only:
+    void* device_ptr = nullptr;     // CUdeviceptr in the owning process
+    unsigned long long accel_h = 0; // CUmemGenericAllocationHandle (for free)
+    std::size_t accel_size = 0;     // granularity-aligned size
 };
 
 int make_sealed_memfd(std::size_t size) {
@@ -77,6 +85,7 @@ struct TensorPool::Impl {
     bool allocate_custom();
     bool allocate_udmabuf();
     bool allocate_v4l2();
+    bool allocate_accelerator();
     void rebuild_share_fds();
 };
 
@@ -146,12 +155,32 @@ bool TensorPool::Impl::allocate_v4l2() {
     return true;
 }
 
+bool TensorPool::Impl::allocate_accelerator() {
+#if AXON_WITH_CUDA
+    for (std::size_t i = 0; i < cfg.n_buffers; ++i) {
+        detail::AccelBuffer ab;
+        if (!detail::accel_alloc(buffer_size, &ab)) return false;
+        Buffer b;
+        b.share_fd = ab.export_fd;   // POSIX shareable handle → sidecar via dma_buf_fds()
+        b.device_ptr = ab.device_ptr;
+        b.accel_h = ab.handle;
+        b.accel_size = ab.aligned;
+        buffers.push_back(b);
+    }
+    return true;
+#else
+    errno = ENOSYS;   // built without CUDA
+    return false;
+#endif
+}
+
 bool TensorPool::Impl::allocate() {
     bool ok = false;
     switch (cfg.backend) {
-        case PoolBackend::Custom:  ok = allocate_custom();  break;
-        case PoolBackend::UDMABUF: ok = allocate_udmabuf(); break;
-        case PoolBackend::V4L2:    ok = allocate_v4l2();    break;
+        case PoolBackend::Custom:      ok = allocate_custom();      break;
+        case PoolBackend::UDMABUF:     ok = allocate_udmabuf();     break;
+        case PoolBackend::V4L2:        ok = allocate_v4l2();        break;
+        case PoolBackend::Accelerator: ok = allocate_accelerator(); break;
     }
     if (!ok) { free_all(); return false; }
 
@@ -163,6 +192,13 @@ bool TensorPool::Impl::allocate() {
 
 void TensorPool::Impl::free_all() {
     for (auto& b : buffers) {
+#if AXON_WITH_CUDA
+        if (b.device_ptr) {   // Accelerator: unmap/free device memory + close export FD
+            detail::AccelBuffer ab{b.device_ptr, b.share_fd, b.accel_size, b.accel_h};
+            detail::accel_free(&ab);
+            continue;
+        }
+#endif
         if (b.share_fd >= 0) ::close(b.share_fd);
         if (b.backing_fd >= 0) ::close(b.backing_fd);
     }
@@ -195,6 +231,10 @@ PoolGeneration TensorPool::generation() const noexcept {
 
 std::size_t TensorPool::buffer_size() const noexcept {
     return impl_->buffer_size;
+}
+
+void* TensorPool::device_ptr(std::size_t index) const noexcept {
+    return index < impl_->buffers.size() ? impl_->buffers[index].device_ptr : nullptr;
 }
 
 int TensorPool::acquire_next() {

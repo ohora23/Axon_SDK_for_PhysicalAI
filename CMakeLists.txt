@@ -12,6 +12,7 @@ option(AXON_ENABLE_JETSON    "Enable NVIDIA Jetson Orin backend"         OFF)
 option(AXON_ENABLE_RT        "Enable RT-Linux specific code paths"       ON)
 option(AXON_BUILD_TESTS      "Build unit and integration tests"          ON)
 option(AXON_WITH_ICEORYX2    "Use the Iceoryx2 metadata-plane backend"   OFF)
+option(AXON_WITH_CUDA        "Enable the CUDA VMM accelerator pool backend" OFF)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
@@ -66,6 +67,15 @@ target_link_libraries(axon PUBLIC Threads::Threads rt)
 if(AXON_WITH_ICEORYX2)
     target_compile_definitions(axon PUBLIC AXON_WITH_ICEORYX2=1)
     target_link_libraries(axon PUBLIC iceoryx2-cxx::static-lib-cxx)
+endif()
+
+# CUDA VMM accelerator pool (R6). Driver API only (libcuda) — no CUDA language
+# enabled, so a plain g++ toolchain links it via CUDA::cuda_driver.
+if(AXON_WITH_CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    target_sources(axon PRIVATE src/accelerator_cuda.cpp)
+    target_compile_definitions(axon PUBLIC AXON_WITH_CUDA=1)
+    target_link_libraries(axon PUBLIC CUDA::cuda_driver)
 endif()
 
 # Enable testing before descending into subdirectories so that add_test() calls

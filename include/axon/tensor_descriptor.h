@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — TensorDescriptor: payload of the Iceoryx2 SHM queue (metadata only)
+// axon — TensorDescriptor: payload of the Iceoryx2 SHM queue (metadata only)
 //
 // The actual tensor payload lives in an external dma-buf; only metadata flows
 // through the message queue. The dma-buf FD itself is delivered through the
@@ -10,9 +10,9 @@
 #pragma once
 
 #include <cstdint>
-#include "dczc/types.h"
+#include "axon/types.h"
 
-namespace dczc {
+namespace axon {
 
 // Wire format. ABI-stable — bump wire_version on change.
 struct alignas(8) TensorDescriptor {
@@ -85,4 +85,4 @@ static_assert(sizeof(TensorDescriptor) == 144,
 // communicate. v2 added the imaging/depth metadata block above.
 constexpr std::uint32_t kWireVersion = 2;
 
-}  // namespace dczc
+}  // namespace axon

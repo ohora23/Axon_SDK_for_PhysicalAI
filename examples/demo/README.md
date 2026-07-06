@@ -1,6 +1,6 @@
-# dczc closed-loop demo + measurement harness
+# axon closed-loop demo + measurement harness
 
-A runnable demonstration of the `dczc` public C++ API — no camera, no
+A runnable demonstration of the `axon` public C++ API — no camera, no
 accelerator. It streams tensors from a producer process to an RT-consumer
 process over the real FD sidecar + seqlock metadata slot + dma-buf pool, then
 reports the metrics the design doc asks for.
@@ -10,7 +10,7 @@ reports the metrics the design doc asks for.
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/examples/demo/dczc_demo --frames 300 --rate-hz 200 --buffers 8
+./build/examples/demo/axon_demo --frames 300 --rate-hz 200 --buffers 8
 ```
 
 Options: `--frames N`, `--rate-hz R`, `--buffers B`, `--quiet`.

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.0.2)
-project(dczc_ros1)
+project(axon_ros1)
 
-# dczc uses C++20. Ubuntu 20.04's default gcc-9 is partial; the Dockerfile sets
+# axon uses C++20. Ubuntu 20.04's default gcc-9 is partial; the Dockerfile sets
 # CXX=g++-10.
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -13,14 +13,14 @@ generate_messages(DEPENDENCIES std_msgs)
 
 catkin_package(CATKIN_DEPENDS roscpp std_msgs message_runtime)
 
-# Prebuilt dczc (headers + static lib) installed by the Dockerfile under /opt/dczc.
-set(DCZC_ROOT "/opt/dczc" CACHE PATH "dczc source/build root")
-set(DCZC_LIB "${DCZC_ROOT}/build/libdczc.a" CACHE FILEPATH "libdczc static lib")
+# Prebuilt axon (headers + static lib) installed by the Dockerfile under /opt/axon.
+set(AXON_ROOT "/opt/axon" CACHE PATH "axon source/build root")
+set(AXON_LIB "${AXON_ROOT}/build/libaxon.a" CACHE FILEPATH "libaxon static lib")
 
-include_directories(${catkin_INCLUDE_DIRS} ${DCZC_ROOT}/include)
+include_directories(${catkin_INCLUDE_DIRS} ${AXON_ROOT}/include)
 
 foreach(node producer_node consumer_node)
   add_executable(${node} src/${node}.cpp)
   add_dependencies(${node} ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-  target_link_libraries(${node} ${catkin_LIBRARIES} ${DCZC_LIB} rt pthread)
+  target_link_libraries(${node} ${catkin_LIBRARIES} ${AXON_LIB} rt pthread)
 endforeach()

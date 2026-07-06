@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — TensorPublisher (design doc §1.1.3 / §1.3)
+// axon — TensorPublisher (design doc §1.1.3 / §1.3)
 //
 // Owns the sidecar server (FD plane) and the metadata channel (metadata plane).
 // handshake_pool() bulk-delivers every pool FD once; subsequent publish() calls
 // carry only the fixed-size TensorDescriptor through the seqlock slot, so the
 // sidecar cost is amortized to ~0 in steady state (design doc §5.1, T_sc).
 
-#include "dczc/publisher.h"
+#include "axon/publisher.h"
 
 #include <atomic>
 #include <cstring>
@@ -16,12 +16,12 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include "dczc/detail/descriptor_util.h"
-#include "dczc/detail/metadata_channel.h"
-#include "dczc/detail/sidecar.h"
-#include "dczc/rt.h"
+#include "axon/detail/descriptor_util.h"
+#include "axon/detail/metadata_channel.h"
+#include "axon/detail/sidecar.h"
+#include "axon/rt.h"
 
-namespace dczc {
+namespace axon {
 
 namespace {
 constexpr int kHandshakeWaitMs = 2000;  // wait for the first consumer to connect
@@ -165,4 +165,4 @@ int TensorPublisher::reannounce_pool() {
     return n;
 }
 
-}  // namespace dczc
+}  // namespace axon

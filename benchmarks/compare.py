@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Run the dczc and ROS2 latency benchmarks with identical parameters and print
+"""Run the axon and ROS2 latency benchmarks with identical parameters and print
 a side-by-side comparison (design doc §8.2).
 
     python3 benchmarks/compare.py --frames 500 --rate-hz 200 --bytes 150528
 
-- dczc runs against the built module (auto-located under build/python).
+- axon runs against the built module (auto-located under build/python).
 - ROS2 runs in a subshell with the ROS2 environment sourced.
 
 Either side is skipped gracefully if its runtime is unavailable, so the script
@@ -26,11 +26,11 @@ REPO = os.path.dirname(HERE)
 
 
 def find_module_dir() -> str | None:
-    for pat in ("build/python", "build*/python", "**/dczc*.so"):
+    for pat in ("build/python", "build*/python", "**/axon*.so"):
         hits = glob.glob(os.path.join(REPO, pat), recursive=True)
         for h in hits:
             d = h if os.path.isdir(h) else os.path.dirname(h)
-            if glob.glob(os.path.join(d, "dczc*.so")):
+            if glob.glob(os.path.join(d, "axon*.so")):
                 return d
     return None
 
@@ -64,16 +64,16 @@ def bench_args(a) -> list[str]:
             "--bytes", str(a.bytes)]
 
 
-def run_dczc(a) -> dict | None:
+def run_axon(a) -> dict | None:
     mod = find_module_dir()
     if not mod:
-        print("[dczc] module not found — build with -DDCZC_BUILD_PYTHON=ON",
+        print("[axon] module not found — build with -DAXON_BUILD_PYTHON=ON",
               file=sys.stderr)
         return None
     env = dict(os.environ)
     env["PYTHONPATH"] = mod + os.pathsep + env.get("PYTHONPATH", "")
-    return run_json([sys.executable, os.path.join(HERE, "bench_dczc.py"),
-                     *bench_args(a), "--json", "/tmp/dczc_bench.json"], env, "dczc")
+    return run_json([sys.executable, os.path.join(HERE, "bench_axon.py"),
+                     *bench_args(a), "--json", "/tmp/axon_bench.json"], env, "axon")
 
 
 def run_ros2(a) -> dict | None:
@@ -96,7 +96,7 @@ def fmt_row(label: str, s: dict | None) -> str:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="dczc vs ROS2 latency comparison")
+    p = argparse.ArgumentParser(description="axon vs ROS2 latency comparison")
     p.add_argument("--frames", type=int, default=500)
     p.add_argument("--rate-hz", type=int, default=200)
     p.add_argument("--bytes", type=int, default=224 * 224 * 3)
@@ -105,19 +105,19 @@ def main() -> int:
     print(f"\nWorkload: {a.frames} frames, {a.bytes} B payload "
           f"({a.bytes/1024:.0f} KiB), {a.rate_hz} Hz\n")
 
-    dczc_s = run_dczc(a)
+    axon_s = run_axon(a)
     ros2_s = run_ros2(a)
 
     print("─────────── one-way publish→observe latency ───────────")
-    print(fmt_row("dczc (zero-copy)", dczc_s))
+    print(fmt_row("axon (zero-copy)", axon_s))
     print(fmt_row("ROS2 (Fast-RTPS DDS)", ros2_s))
     print("────────────────────────────────────────────────────────")
 
-    if dczc_s and ros2_s and dczc_s.get("n") and ros2_s.get("n"):
+    if axon_s and ros2_s and axon_s.get("n") and ros2_s.get("n"):
         for k in ("p50_us", "p99_us"):
-            d, r = dczc_s[k], ros2_s[k]
+            d, r = axon_s[k], ros2_s[k]
             if d > 0:
-                print(f"  {k:<8} speedup (ROS2/dczc): {r/d:5.1f}x")
+                print(f"  {k:<8} speedup (ROS2/axon): {r/d:5.1f}x")
     print()
     return 0
 

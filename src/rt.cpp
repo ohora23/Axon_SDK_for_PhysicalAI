@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — RT-Linux helpers (design doc §3.2)
+// axon — RT-Linux helpers (design doc §3.2)
 
-#include "dczc/rt.h"
+#include "axon/rt.h"
 
 #include <cerrno>
 #include <cstdlib>
@@ -14,7 +14,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-namespace dczc {
+namespace axon {
 
 namespace {
 
@@ -107,4 +107,4 @@ std::uint64_t rt_now_ns() noexcept {
            static_cast<std::uint64_t>(ts.tv_nsec);
 }
 
-}  // namespace dczc
+}  // namespace axon

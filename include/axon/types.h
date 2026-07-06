@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — Data-centric zero-copy for Physical AI
+// axon — Data-centric zero-copy for Physical AI
 //
 // Common types and enums. Every other header includes this one.
 
@@ -7,7 +7,7 @@
 
 #include <cstdint>
 
-namespace dczc {
+namespace axon {
 
 // ---------- Data types ----------
 
@@ -115,4 +115,4 @@ struct AcceleratorHandle {
     std::size_t size_bytes;
 };
 
-}  // namespace dczc
+}  // namespace axon

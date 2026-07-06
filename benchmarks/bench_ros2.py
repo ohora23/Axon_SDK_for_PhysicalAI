@@ -4,13 +4,13 @@
 
 Publisher and subscriber run as separate *spawned* processes (subprocess, not
 fork — rclpy is multi-threaded, so fork-after-import would risk deadlock),
-exchanging a UInt8MultiArray of the same payload size as the dczc benchmark.
+exchanging a UInt8MultiArray of the same payload size as the axon benchmark.
 Every frame carries a monotonic publish timestamp in its first bytes; the
-subscriber computes publish->observe latency. Unlike dczc, the full payload is
+subscriber computes publish->observe latency. Unlike axon, the full payload is
 serialized and copied through the DDS transport on every frame — exactly the
 cost this project exists to remove.
 
-QoS is sensor-data (best-effort, keep-last depth 1) to mirror dczc's latest-value
+QoS is sensor-data (best-effort, keep-last depth 1) to mirror axon's latest-value
 seqlock semantics as closely as ROS2 allows.
 
 Run (ROS2 must be sourced):
@@ -40,7 +40,7 @@ def _role_subscriber(args) -> int:
     from std_msgs.msg import UInt8MultiArray
 
     rclpy.init()
-    node = Node("dczc_bench_sub")
+    node = Node("axon_bench_sub")
     samples: list[int] = []
     state = {"done": False, "last": 0}
 
@@ -79,7 +79,7 @@ def _role_publisher(args) -> int:
     from std_msgs.msg import UInt8MultiArray
 
     rclpy.init()
-    node = Node("dczc_bench_pub")
+    node = Node("axon_bench_pub")
     pub = node.create_publisher(UInt8MultiArray, TOPIC, qos_profile_sensor_data)
 
     # Wait for DDS discovery so early frames are not dropped.

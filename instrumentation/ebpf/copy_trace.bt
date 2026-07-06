@@ -3,7 +3,7 @@
 //
 // copy_trace.bt — count kernel<->user copies and network send/recv, by process.
 //
-// The dczc data path is pure shared-memory: the producer stores into an mmap'd
+// The axon data path is pure shared-memory: the producer stores into an mmap'd
 // dma-buf and the RT consumer loads from it — no per-frame syscall, no
 // copy_to_user/copy_from_user of the payload. ROS2/DDS moves each frame through
 // the transport, which shows up here as copy_*_user and/or sendmsg/recvmsg bytes.

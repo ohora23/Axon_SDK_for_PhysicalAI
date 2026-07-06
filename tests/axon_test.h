@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — minimal dependency-free test harness
+// axon — minimal dependency-free test harness
 //
 // No GTest dependency (keeps the tree buildable on a bare board). Each test file
-// defines cases with DCZC_TEST and ends with DCZC_TEST_MAIN(). A non-zero exit
+// defines cases with AXON_TEST and ends with AXON_TEST_MAIN(). A non-zero exit
 // code marks failure so ctest picks it up.
 
 #pragma once
@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace dczc_test {
+namespace axon_test {
 
 struct Case {
     std::string name;
@@ -53,12 +53,12 @@ inline int run_all(const char* suite) {
     return failed == 0 ? 0 : 1;
 }
 
-}  // namespace dczc_test
+}  // namespace axon_test
 
-#define DCZC_TEST(name)                                                       \
-    static void dczc_test_##name(bool& _dczc_ok);                             \
-    static ::dczc_test::Registrar dczc_reg_##name(#name, dczc_test_##name);   \
-    static void dczc_test_##name([[maybe_unused]] bool& _dczc_ok)
+#define AXON_TEST(name)                                                       \
+    static void axon_test_##name(bool& _axon_ok);                             \
+    static ::axon_test::Registrar axon_reg_##name(#name, axon_test_##name);   \
+    static void axon_test_##name([[maybe_unused]] bool& _axon_ok)
 
 // Soft check: records failure but keeps running the case.
 #define CHECK(cond)                                                           \
@@ -66,7 +66,7 @@ inline int run_all(const char* suite) {
         if (!(cond)) {                                                        \
             std::printf("    CHECK failed: %s (%s:%d)\n", #cond,              \
                         __FILE__, __LINE__);                                  \
-            _dczc_ok = false;                                                 \
+            _axon_ok = false;                                                 \
         }                                                                     \
     } while (0)
 
@@ -76,10 +76,10 @@ inline int run_all(const char* suite) {
         if (!(cond)) {                                                        \
             std::printf("    REQUIRE failed: %s (%s:%d)\n", #cond,            \
                         __FILE__, __LINE__);                                  \
-            _dczc_ok = false;                                                 \
+            _axon_ok = false;                                                 \
             return;                                                           \
         }                                                                     \
     } while (0)
 
-#define DCZC_TEST_MAIN(suite)                                                 \
-    int main() { return ::dczc_test::run_all(suite); }
+#define AXON_TEST_MAIN(suite)                                                 \
+    int main() { return ::axon_test::run_all(suite); }

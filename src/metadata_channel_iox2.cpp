@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — Metadata plane: Iceoryx2 backend (compiled only with DCZC_WITH_ICEORYX2)
+// axon — Metadata plane: Iceoryx2 backend (compiled only with AXON_WITH_ICEORYX2)
 //
 // Replaces the POSIX-SHM seqlock stand-in with Iceoryx2's lock-free SHM queue —
 // the metadata plane the design doc §1.1 specifies. TensorDescriptor is a
@@ -11,7 +11,7 @@
 // caching it so reads between publishes still return the current value — exactly
 // how the seqlock slot behaves.
 
-#include "dczc/detail/metadata_channel.h"
+#include "axon/detail/metadata_channel.h"
 
 #include <cstring>
 #include <ctime>
@@ -20,7 +20,7 @@
 
 #include "iox2/iceoryx2.hpp"
 
-namespace dczc::detail {
+namespace axon::detail {
 
 namespace {
 
@@ -35,9 +35,9 @@ void sleep_ms(int ms) {
     nanosleep(&ts, nullptr);
 }
 
-// Iceoryx2 service names allow a broad character set; reuse the dczc convention.
+// Iceoryx2 service names allow a broad character set; reuse the axon convention.
 std::string service_id(const std::string& service_name) {
-    return "dczc/" + service_name;
+    return "axon/" + service_name;
 }
 
 Service open_service(Node& node, const std::string& service_name) {
@@ -137,4 +137,4 @@ MetadataChannel* make_iceoryx2_subscriber(const std::string& service_name,
     }
 }
 
-}  // namespace dczc::detail
+}  // namespace axon::detail

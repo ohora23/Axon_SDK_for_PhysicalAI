@@ -13,16 +13,16 @@ more than the RT consumer needs — it wants "the newest descriptor, now."
 
 ## Decision
 
-Make the metadata plane an **abstract interface** (`dczc::detail::MetadataChannel`) with two
+Make the metadata plane an **abstract interface** (`axon::detail::MetadataChannel`) with two
 interchangeable backends:
 
 - **Seqlock** (`src/metadata_channel.cpp`) — a single-slot, seqlock-protected
   `TensorDescriptor` in a POSIX shared-memory object. Zero dependencies, always built,
   default.
-- **Iceoryx2** (`src/metadata_channel_iox2.cpp`, `-DDCZC_WITH_ICEORYX2=ON`) — the real
+- **Iceoryx2** (`src/metadata_channel_iox2.cpp`, `-DAXON_WITH_ICEORYX2=ON`) — the real
   lock-free `publish_subscribe<TensorDescriptor>` queue.
 
-Backend chosen at runtime via `DCZC_METADATA_BACKEND`; Iceoryx2 init failure falls back to
+Backend chosen at runtime via `AXON_METADATA_BACKEND`; Iceoryx2 init failure falls back to
 seqlock. This makes the design-doc promise — "swapping in Iceoryx2 changes only this file" —
 literally true.
 
@@ -36,7 +36,7 @@ literally true.
 
 ## Evidence (measured — Iceoryx2 v0.9.2)
 
-- **Both backends verified**: default and `-DDCZC_WITH_ICEORYX2=ON` builds each pass 7/7
+- **Both backends verified**: default and `-DAXON_WITH_ICEORYX2=ON` builds each pass 7/7
   ctest, warning-clean; the e2e demo runs over Iceoryx2 (confirmed by the iox2 SHM node
   segment in `/dev/shm`), 0 payload errors.
 - **Seqlock is the better default here**: in a local A/B run the seqlock backend showed lower

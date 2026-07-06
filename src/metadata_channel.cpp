@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — Metadata plane: backend factory + POSIX-SHM seqlock backend (§1.1/§3.3)
+// axon — Metadata plane: backend factory + POSIX-SHM seqlock backend (§1.1/§3.3)
 
-#include "dczc/detail/metadata_channel.h"
+#include "axon/detail/metadata_channel.h"
 
 #include <atomic>
 #include <cerrno>
@@ -14,10 +14,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-namespace dczc::detail {
+namespace axon::detail {
 
-// Defined in metadata_channel_iox2.cpp (only compiled with DCZC_WITH_ICEORYX2).
-#ifdef DCZC_WITH_ICEORYX2
+// Defined in metadata_channel_iox2.cpp (only compiled with AXON_WITH_ICEORYX2).
+#ifdef AXON_WITH_ICEORYX2
 MetadataChannel* make_iceoryx2_publisher(const std::string& service_name);
 MetadataChannel* make_iceoryx2_subscriber(const std::string& service_name,
                                           int timeout_ms);
@@ -30,13 +30,13 @@ void sleep_ms(int ms) {
     nanosleep(&ts, nullptr);
 }
 
-#ifdef DCZC_WITH_ICEORYX2
-// Which backend to use: DCZC_METADATA_BACKEND = "seqlock" | "iceoryx2".
+#ifdef AXON_WITH_ICEORYX2
+// Which backend to use: AXON_METADATA_BACKEND = "seqlock" | "iceoryx2".
 // Only meaningful when the Iceoryx2 backend is compiled in; default is iceoryx2.
 enum class Backend { Seqlock, Iceoryx2 };
 
 Backend selected_backend() {
-    const char* env = std::getenv("DCZC_METADATA_BACKEND");
+    const char* env = std::getenv("AXON_METADATA_BACKEND");
     if (env && std::strcmp(env, "seqlock") == 0) return Backend::Seqlock;
     return Backend::Iceoryx2;
 }
@@ -174,7 +174,7 @@ bool SeqlockMetadataChannel::has_data() const noexcept {
 // ------------------------------------------------------------- public name
 
 std::string metadata_shm_name(const std::string& service_name) {
-    std::string out = "/dczc.";
+    std::string out = "/axon.";
     for (char c : service_name) {
         out.push_back((c == '/' || c == ' ' || c == ':') ? '_' : c);
     }
@@ -184,7 +184,7 @@ std::string metadata_shm_name(const std::string& service_name) {
 // ---------------------------------------------------------------- factory
 
 MetadataChannel* MetadataChannel::create_publisher(const std::string& service_name) {
-#ifdef DCZC_WITH_ICEORYX2
+#ifdef AXON_WITH_ICEORYX2
     if (selected_backend() == Backend::Iceoryx2) {
         if (auto* c = make_iceoryx2_publisher(service_name)) return c;
         // else fall through to the always-available seqlock backend
@@ -195,7 +195,7 @@ MetadataChannel* MetadataChannel::create_publisher(const std::string& service_na
 
 MetadataChannel* MetadataChannel::create_subscriber(const std::string& service_name,
                                                     int timeout_ms) {
-#ifdef DCZC_WITH_ICEORYX2
+#ifdef AXON_WITH_ICEORYX2
     if (selected_backend() == Backend::Iceoryx2) {
         if (auto* c = make_iceoryx2_subscriber(service_name, timeout_ms)) return c;
     }
@@ -203,4 +203,4 @@ MetadataChannel* MetadataChannel::create_subscriber(const std::string& service_n
     return SeqlockMetadataChannel::create_subscriber(service_name, timeout_ms);
 }
 
-}  // namespace dczc::detail
+}  // namespace axon::detail

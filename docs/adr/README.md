@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-Short records of the load-bearing design decisions in dczc, each with the
+Short records of the load-bearing design decisions in axon, each with the
 **measured evidence** that backs it. ADRs capture *why* a choice was made so it can
 be revisited deliberately, not by accident.
 

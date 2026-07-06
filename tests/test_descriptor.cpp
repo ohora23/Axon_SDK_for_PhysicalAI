@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Wire-format ABI + descriptor validation.
 
-#include "dczc/tensor_descriptor.h"
-#include "dczc/types.h"
-#include "dczc/detail/descriptor_util.h"
-#include "dczc_test.h"
+#include "axon/tensor_descriptor.h"
+#include "axon/types.h"
+#include "axon/detail/descriptor_util.h"
+#include "axon_test.h"
 
-using namespace dczc;
+using namespace axon;
 
-DCZC_TEST(abi_layout) {
+AXON_TEST(abi_layout) {
     // Fixed-size POD invariants the wire format depends on.
     CHECK(sizeof(TensorDescriptor) % 8 == 0);
     CHECK(sizeof(TensorDescriptor) <= 256);
@@ -17,7 +17,7 @@ DCZC_TEST(abi_layout) {
     CHECK(kWireVersion == 2);                  // v2: imaging/depth metadata
 }
 
-DCZC_TEST(v2_depth_metadata_roundtrip) {
+AXON_TEST(v2_depth_metadata_roundtrip) {
     // A padded U16 depth frame: row_pitch > packed row width.
     TensorDescriptor d {};
     d.rank = 2;
@@ -48,7 +48,7 @@ DCZC_TEST(v2_depth_metadata_roundtrip) {
     CHECK(!detail::descriptor_is_valid(d, 640ull * 240));
 }
 
-DCZC_TEST(dtype_sizes) {
+AXON_TEST(dtype_sizes) {
     CHECK(dtype_size(DType::U8) == 1);
     CHECK(dtype_size(DType::F16) == 2);
     CHECK(dtype_size(DType::BF16) == 2);
@@ -58,7 +58,7 @@ DCZC_TEST(dtype_sizes) {
     CHECK(dtype_size(DType::I64) == 8);
 }
 
-DCZC_TEST(element_and_byte_counts) {
+AXON_TEST(element_and_byte_counts) {
     TensorDescriptor d {};
     d.rank = 3;
     d.shape[0] = 1; d.shape[1] = 3; d.shape[2] = 224;
@@ -67,7 +67,7 @@ DCZC_TEST(element_and_byte_counts) {
     CHECK(detail::implied_bytes(d) == 1u * 3u * 224u * 4u);
 }
 
-DCZC_TEST(validity_bounds) {
+AXON_TEST(validity_bounds) {
     TensorDescriptor d {};
     d.rank = 1;
     d.shape[0] = 16;
@@ -93,4 +93,4 @@ DCZC_TEST(validity_bounds) {
     CHECK(!detail::descriptor_is_valid(d, 4096));
 }
 
-DCZC_TEST_MAIN("descriptor")
+AXON_TEST_MAIN("descriptor")

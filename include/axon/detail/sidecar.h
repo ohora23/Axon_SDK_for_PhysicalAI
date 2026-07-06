@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — FD sidecar (internal)
+// axon — FD sidecar (internal)
 //
 // Implements the "FD plane" from the design doc §1.3. Iceoryx2 SHM queues only
 // share memory, not the FD table, so dma-buf / sync_file FDs must travel through
@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-namespace dczc::detail {
+namespace axon::detail {
 
 // Maximum FDs deliverable in a single SCM_RIGHTS message. Matches the spike PoC
 // control-buffer sizing and bounds the pool ring.
@@ -135,4 +135,4 @@ private:
     Impl* impl_;
 };
 
-}  // namespace dczc::detail
+}  // namespace axon::detail

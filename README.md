@@ -1,4 +1,4 @@
-# dczc — Data-Centric Zero-Copy for Physical AI
+# Axon — Data-Centric Zero-Copy for Physical AI
 
 > **One-liner**: Not another middleware on top of ROS2. We extend the **sensor → accelerator → RT control loop** path with end-to-end zero-copy that doesn't break, and a **bounded staleness that is measured and guaranteed**.
 
@@ -6,7 +6,20 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Platform: Linux + PREEMPT_RT](https://img.shields.io/badge/platform-Linux%20%2B%20PREEMPT__RT-success)]()
 
-> ⚠️ **Status**: design phase. Week 1-2 spike PoC in progress. APIs and implementation are still in flux. This README is a draft written from the perspective of the public release.
+> **Status**: working library + measured results. Core is built and tested (9/9); benchmarks, hardware verification, ROS1/ROS2 integration, and a VLM handoff demo all land on this dev PC (RTX 5080). See [Measured Results](#measured-results) and [docs/hardware-verification.md](docs/hardware-verification.md).
+
+### Headline results (measured, RTX 5080 / Ryzen 9800X3D vs ROS2/Fast-RTPS)
+
+| What | Result |
+|---|---|
+| Single-stream latency (1 MiB) | **20.9× lower** (46 µs vs 971 µs) |
+| Multi-stream CPU @ 295 MB/s | **3.3× less** + zero dropped frames |
+| Memory (same bytes) | **8.6× fewer cache-misses**, ~0 syscalls/frame |
+| RT loop page faults | **0 / frame** |
+| GPU cross-process share | **zero-copy**, 200/200 frames, 1.68 GB |
+| VLM encoder→LLM handoff (video 34 MB) | **36× faster** than a host round-trip |
+
+> Cost is **O(1) in payload size**: only fixed-size descriptors cross the metadata plane; the tensor stays in a shared dma-buf. As bandwidth grows, axon CPU stays flat while ROS2/DDS scales with the payload it copies.
 
 ---
 
@@ -14,7 +27,7 @@
 
 ROS2 + Iceoryx2 integrations provide zero-copy at the **message middleware level**. A message can reach RAM zero-copy, but moving it onto an accelerator (NPU/GPU) typically requires another copy.
 
-`dczc` adds **two missing planes** on top of that:
+`axon` adds **two missing planes** on top of that:
 
 1. **FD plane** — pass dma-buf FDs directly through a `SCM_RIGHTS` / `pidfd_getfd(2)` sidecar. The dma-buf exported by V4L2 capture is imported by the accelerator driver — **no host memory copy**.
 2. **Time plane** — inference runs in a non-RT worker; the RT control loop reads results via a seqlock as a zero-copy view. The staleness bound is computed by an **explicit formula** (7 terms) and is therefore directly usable in safety analysis.
@@ -50,7 +63,7 @@ Green = zero-copy region. Blue = metadata message. Twelve more diagrams in [`Des
 Measured on a workstation (RTX 5080 / Ryzen 9800X3D, non-RT kernel) against ROS2 Jazzy /
 Fast-RTPS on the same workload. Full detail: [docs/hardware-verification.md](docs/hardware-verification.md).
 
-| Metric | Target | Measured (dczc vs ROS2) |
+| Metric | Target | Measured (axon vs ROS2) |
 |---|---|---|
 | Single-stream latency (1 MiB) | low | **46 µs vs 971 µs — 20.9× lower** ✅ |
 | CPU at 295 MB/s (multi-stream) | flat in bandwidth | **0.30 vs 0.98 cores — 3.3× less** ✅ |
@@ -75,14 +88,14 @@ worst_case_staleness ≤
 
 The thesis is that transport cost is **O(1) in payload size**: only fixed-size descriptors
 cross the metadata plane while the tensor stays in a shared dma-buf. So as sensor bandwidth
-grows, dczc's CPU stays flat while ROS2/DDS scales with the payload it serializes and copies.
+grows, axon's CPU stays flat while ROS2/DDS scales with the payload it serializes and copies.
 
 **CPU stays flat as bandwidth grows** (serving-robot multi-stream workload, [`benchmarks/mock`](benchmarks/mock/README.md)):
 
 ![CPU vs bandwidth](docs/assets/02_cpu_sweep.png)
 
-At 295 MB/s dczc uses **0.30 cores vs ROS2's 0.98 (3.3×)** — and drops **zero** frames while
-ROS2's worst stream falls to ~96.7 %. The CPU dczc *doesn't* spend on data plumbing is CPU
+At 295 MB/s axon uses **0.30 cores vs ROS2's 0.98 (3.3×)** — and drops **zero** frames while
+ROS2's worst stream falls to ~96.7 %. The CPU axon *doesn't* spend on data plumbing is CPU
 left for perception and control.
 
 **Single-stream latency, and it widens with payload** ([`benchmarks/`](benchmarks/)):
@@ -95,7 +108,7 @@ left for perception and control.
 
 ROS2 spends **8.6× the cache-misses** and **5× the instructions** moving the same data.
 
-**Real GPU zero-copy without a robot board.** dczc's FD sidecar carries a live RTX 5080 GPU
+**Real GPU zero-copy without a robot board.** axon's FD sidecar carries a live RTX 5080 GPU
 memory handle across processes: 200/200 frames validated on-GPU, **0 host payload copies**,
 1.68 GB moved zero-copy. Plus RT page-faults measured at **0 per frame**. See
 [docs/hardware-verification.md](docs/hardware-verification.md) and the architecture decisions
@@ -124,17 +137,17 @@ The full library, examples, Python bindings, benchmarks, and hardware-instrument
 suite build today:
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDCZC_BUILD_PYTHON=ON
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DAXON_BUILD_PYTHON=ON
 cmake --build build -j
 (cd build && ctest --output-on-failure)      # 8/8, warning-clean
 
-# dczc vs ROS2 benchmarks (ROS2 optional)
+# axon vs ROS2 benchmarks (ROS2 optional)
 python3 benchmarks/mock/mock_compare.py --scales 1,2,3,4 --seconds 5
 # real-hardware verification (GPU / page-faults / syscalls / cache)
 instrumentation/gpu/build.sh && instrumentation/run_bounded.sh ./build/gpu_sidecar_demo 8 200
 ```
 
-Optional: `-DDCZC_WITH_ICEORYX2=ON` for the Iceoryx2 metadata backend
+Optional: `-DAXON_WITH_ICEORYX2=ON` for the Iceoryx2 metadata backend
 (see [docs/metadata-backends.md](docs/metadata-backends.md)).
 
 ### Prerequisites
@@ -154,10 +167,10 @@ cmake -S examples/spike_poc -B build/spike -DCMAKE_BUILD_TYPE=Release
 cmake --build build/spike -j
 
 # Run (one terminal)
-./build/spike/dczc_spike_producer /dev/video0
+./build/spike/axon_spike_producer /dev/video0
 
 # Other terminal
-./build/spike/dczc_spike_consumer
+./build/spike/axon_spike_consumer
 ```
 
 What the PoC validates:
@@ -173,17 +186,17 @@ What the PoC validates:
 ## API Preview (current header skeleton)
 
 ```cpp
-#include <dczc/publisher.h>
-#include <dczc/subscriber.h>
-#include <dczc/pool.h>
+#include <axon/publisher.h>
+#include <axon/subscriber.h>
+#include <axon/pool.h>
 
 // Producer side (non-RT)
-auto pool = dczc::TensorPool::create({
+auto pool = axon::TensorPool::create({
     .n_buffers   = 32,
     .buffer_size = 4 * 1024 * 1024,
-    .backend     = dczc::PoolBackend::V4L2,
+    .backend     = axon::PoolBackend::V4L2,
 });
-auto pub = dczc::TensorPublisher::create("camera/inference_out", *pool);
+auto pub = axon::TensorPublisher::create("camera/inference_out", *pool);
 pub->handshake_pool();  // SCM_RIGHTS bulk transfer
 
 while (running) {
@@ -194,11 +207,11 @@ while (running) {
 }
 
 // Consumer side (RT 1kHz loop)
-auto sub = dczc::TensorSubscriber::create("camera/inference_out");
+auto sub = axon::TensorSubscriber::create("camera/inference_out");
 sub->wait_handshake();
-sub->set_fallback_policy(dczc::FallbackPolicy::LastKnownGood);
+sub->set_fallback_policy(axon::FallbackPolicy::LastKnownGood);
 
-dczc::rt_setup_memory_and_sched();  // mlockall + MAP_POPULATE + SCHED_FIFO
+axon::rt_setup_memory_and_sched();  // mlockall + MAP_POPULATE + SCHED_FIFO
 
 while (rt_tick()) {
     auto view = sub->latest_view(/*max_retry=*/8);
@@ -210,20 +223,20 @@ while (rt_tick()) {
 }
 ```
 
-[Full API](include/dczc/) | [`TensorDescriptor` definition](DesignFiles/detailed_design_doc.md#112-tensordescriptor-definition-iceoryx2-payload)
+[Full API](include/axon/) | [`TensorDescriptor` definition](DesignFiles/detailed_design_doc.md#112-tensordescriptor-definition-iceoryx2-payload)
 
 ---
 
 ## FAQ
 
 **Q. ROS2 + Iceoryx2 integrations already exist. Why another?**
-A. `rmw_iceoryx_cpp` and Iceoryx2's ROS2 integration give zero-copy at the **message middleware level**. dczc adds the **dma-buf FD sidecar + accelerator import integration layer** on top, so zero-copy is unbroken from sensor through accelerator and into the RT control loop. [Differentiation in detail](DesignFiles/data-centric-zero-copy-design-20260510.md#premises-agreed)
+A. `rmw_iceoryx_cpp` and Iceoryx2's ROS2 integration give zero-copy at the **message middleware level**. axon adds the **dma-buf FD sidecar + accelerator import integration layer** on top, so zero-copy is unbroken from sensor through accelerator and into the RT control loop. [Differentiation in detail](DesignFiles/data-centric-zero-copy-design-20260510.md#premises-agreed)
 
 **Q. Can dma-buf FDs be sent through Iceoryx2 SHM?**
 A. No. Writing an integer FD into shared memory means nothing in another process — FD tables are per-process. Cross-process FD transfer requires `SCM_RIGHTS` or `pidfd_getfd(2)`. [Sidecar handshake sequence](DesignFiles/diagrams.md#3-fd-handshake-sequence)
 
 **Q. Does the RT loop call NPU inference directly?**
-A. No. NPU inference latency has a long tail through P99.99 and is affected by thermal throttling — it cannot be bounded deterministically. dczc runs inference in a non-RT worker; the RT loop reads only the **most recent inference result with a measured/guaranteed staleness bound**, as a zero-copy view via seqlock. [RT pattern](DesignFiles/detailed_design_doc.md#33-rt-consumer-pattern-seqlock)
+A. No. NPU inference latency has a long tail through P99.99 and is affected by thermal throttling — it cannot be bounded deterministically. axon runs inference in a non-RT worker; the RT loop reads only the **most recent inference result with a measured/guaranteed staleness bound**, as a zero-copy view via seqlock. [RT pattern](DesignFiles/detailed_design_doc.md#33-rt-consumer-pattern-seqlock)
 
 **Q. Which platform is the first build target?**
 A. Decided during the week 1-2 spike PoC. Candidates: **AMD AI Series (XDNA)** and **NVIDIA Jetson Orin**. Apple Silicon is **out of scope for the first build** because macOS lacks V4L2 and Asahi Linux lacks an ANE driver. [Decision tree](DesignFiles/diagrams.md#12-week-1-2-spike-poc-decision-tree)

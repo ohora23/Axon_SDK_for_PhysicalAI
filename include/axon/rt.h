@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — RT-Linux helpers: memory pinning, scheduling, page-fault prevention
+// axon — RT-Linux helpers: memory pinning, scheduling, page-fault prevention
 //
 // Call once before entering the RT loop. Inside the RT loop no syscalls are
 // allowed.
@@ -9,7 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dczc {
+namespace axon {
 
 struct RtSetupConfig {
     int    sched_priority      = 80;          // SCHED_FIFO priority (1-99)
@@ -40,4 +40,4 @@ int rt_prefault_dma_buf_view(void* mapped_view, std::size_t size) noexcept;
 // CLOCK_MONOTONIC_RAW via vDSO — RT-safe.
 std::uint64_t rt_now_ns() noexcept;
 
-}  // namespace dczc
+}  // namespace axon

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""dczc latency benchmark — the zero-copy path.
+"""axon latency benchmark — the zero-copy path.
 
 Producer and consumer run as separate processes (fork) over the real sidecar +
 seqlock + dma-buf pool. Each frame carries a monotonic publish timestamp in its
@@ -9,7 +9,7 @@ lives in a shared dma-buf, only the fixed-size descriptor crosses the metadata
 queue — there is no per-frame serialization or byte copy on the transport.
 
 Run (needs the built module on PYTHONPATH):
-    PYTHONPATH=build/python python3 benchmarks/bench_dczc.py --json /tmp/dczc.json
+    PYTHONPATH=build/python python3 benchmarks/bench_axon.py --json /tmp/axon.json
 """
 
 from __future__ import annotations
@@ -23,14 +23,14 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
 import bench_common as bc  # noqa: E402
 
-import dczc  # noqa: E402
+import axon  # noqa: E402
 
-SERVICE = "bench/dczc_stream"
+SERVICE = "bench/axon_stream"
 
 
 def run_consumer(args, result_path: str) -> int:
-    sub = dczc.TensorSubscriber.create(SERVICE)
-    sub.set_fallback_policy(dczc.FallbackPolicy.LastKnownGood)
+    sub = axon.TensorSubscriber.create(SERVICE)
+    sub.set_fallback_policy(axon.FallbackPolicy.LastKnownGood)
     if sub.wait_handshake(5000) != 0:
         return 11
 
@@ -54,7 +54,7 @@ def run_consumer(args, result_path: str) -> int:
             break
 
     stats = bc.summarize(samples, {
-        "transport": "dczc (zero-copy)",
+        "transport": "axon (zero-copy)",
         "payload_bytes": args.bytes,
         "rate_hz": args.rate_hz,
         "frames_sent": args.frames,
@@ -66,17 +66,17 @@ def run_consumer(args, result_path: str) -> int:
 
 def run_producer(args, child_pid: int) -> int:
     n_buffers = 16
-    pool = dczc.TensorPool.create(
+    pool = axon.TensorPool.create(
         n_buffers=n_buffers, buffer_size=max(args.bytes, 4096),
-        backend=dczc.PoolBackend.Custom)
-    pub = dczc.TensorPublisher.create(SERVICE, pool)
+        backend=axon.PoolBackend.Custom)
+    pub = axon.TensorPublisher.create(SERVICE, pool)
     pub.handshake_pool()
 
     frame = bytearray(args.bytes)
     for s in range(1, args.frames + 1):
         t0 = bc.monotonic_ns()
         bc.stamp_header(frame, t0, s)
-        pub.publish(np.frombuffer(frame, dtype=np.uint8), dczc.DType.U8)
+        pub.publish(np.frombuffer(frame, dtype=np.uint8), axon.DType.U8)
         bc.sleep_for_rate(args.rate_hz, t0)
 
     _, status = os.waitpid(child_pid, 0)
@@ -84,15 +84,15 @@ def run_producer(args, child_pid: int) -> int:
 
 
 def main() -> int:
-    args = bc.common_args("dczc latency benchmark").parse_args()
-    result_path = args.json or "/tmp/dczc_bench.json"
+    args = bc.common_args("axon latency benchmark").parse_args()
+    result_path = args.json or "/tmp/axon_bench.json"
 
     pid = os.fork()
     if pid == 0:
         os._exit(run_consumer(args, result_path))
     rc = run_producer(args, pid)
     if rc != 0:
-        print(f"bench_dczc: consumer failed rc={rc}", file=sys.stderr)
+        print(f"bench_axon: consumer failed rc={rc}", file=sys.stderr)
         return rc
 
     with open(result_path) as f:

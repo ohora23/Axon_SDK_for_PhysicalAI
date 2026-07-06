@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>dczc_ros1</name>
+  <name>axon_ros1</name>
   <version>0.0.1</version>
-  <description>dczc ROS1 offload PoC: descriptor topic + dma-buf SCM_RIGHTS sidecar (zero-copy payload).</description>
+  <description>axon ROS1 offload PoC: descriptor topic + dma-buf SCM_RIGHTS sidecar (zero-copy payload).</description>
   <maintainer email="ohora23@gmail.com">ohora23</maintainer>
   <license>Apache-2.0</license>
 

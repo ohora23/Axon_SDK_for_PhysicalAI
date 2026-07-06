@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc ROS1 offload — producer node.
+// axon ROS1 offload — producer node.
 //
 // Publishes a small TensorDescriptor on a ROS1 topic (the metadata/liveness
-// plane) while the actual payload stays in a dczc dma-buf pool and its FDs are
-// delivered once through the dczc SCM_RIGHTS sidecar (the FD plane). Each frame
+// plane) while the actual payload stays in a axon dma-buf pool and its FDs are
+// delivered once through the axon SCM_RIGHTS sidecar (the FD plane). Each frame
 // only stamps a seqno into the shared buffer and publishes the descriptor — no
 // payload is serialized or copied through ROS.
 
@@ -15,15 +15,15 @@
 
 #include <ros/ros.h>
 
-#include "dczc/pool.h"
-#include "dczc/rt.h"
-#include "dczc/detail/sidecar.h"
-#include "dczc/tensor_descriptor.h"   // kWireVersion
-#include "dczc/types.h"
-#include "dczc_ros1/TensorDescriptor.h"
+#include "axon/pool.h"
+#include "axon/rt.h"
+#include "axon/detail/sidecar.h"
+#include "axon/tensor_descriptor.h"   // kWireVersion
+#include "axon/types.h"
+#include "axon_ros1/TensorDescriptor.h"
 
 int main(int argc, char** argv) {
-    ros::init(argc, argv, "dczc_producer");
+    ros::init(argc, argv, "axon_producer");
     ros::NodeHandle nh("~");
 
     int n_buffers = nh.param("n_buffers", 8);
@@ -31,10 +31,10 @@ int main(int argc, char** argv) {
     double rate_hz = nh.param("rate_hz", 30.0);
     std::string service = nh.param<std::string>("service", "ros1_offload");
 
-    // dczc FD plane: a dma-buf pool + sidecar server.
-    auto pool = dczc::TensorPool::create(
+    // axon FD plane: a dma-buf pool + sidecar server.
+    auto pool = axon::TensorPool::create(
         {static_cast<size_t>(n_buffers), static_cast<size_t>(bytes),
-         dczc::PoolBackend::Custom, nullptr});
+         axon::PoolBackend::Custom, nullptr});
     if (!pool) { ROS_FATAL("TensorPool::create failed"); return 1; }
 
     const auto& fds = pool->dma_buf_fds();
@@ -44,16 +44,16 @@ int main(int argc, char** argv) {
         if (host[i] == MAP_FAILED) { ROS_FATAL("mmap pool buffer failed"); return 1; }
     }
 
-    auto* server = dczc::detail::SidecarServer::create(service);
+    auto* server = axon::detail::SidecarServer::create(service);
     if (!server) { ROS_FATAL("SidecarServer::create failed"); return 1; }
     server->set_pool(fds, static_cast<uint32_t>(pool->generation()),
-                     static_cast<uint64_t>(bytes), dczc::kWireVersion);
+                     static_cast<uint64_t>(bytes), axon::kWireVersion);
 
     ros::Publisher pub =
-        nh.advertise<dczc_ros1::TensorDescriptor>("/dczc/tensor_desc", 10);
+        nh.advertise<axon_ros1::TensorDescriptor>("/axon/tensor_desc", 10);
 
-    ROS_INFO("dczc producer: %d buffers x %d B, %.0f Hz, sidecar '%s'. "
-             "Publishing descriptors on /dczc/tensor_desc; payload stays in dma-buf.",
+    ROS_INFO("axon producer: %d buffers x %d B, %.0f Hz, sidecar '%s'. "
+             "Publishing descriptors on /axon/tensor_desc; payload stays in dma-buf.",
              n_buffers, bytes, rate_hz, service.c_str());
 
     ros::Rate rate(rate_hz);
@@ -67,15 +67,15 @@ int main(int argc, char** argv) {
         // "Inference output": stamp the seqno into the shared buffer (offset 0).
         std::memcpy(host[idx], &seqno, sizeof(seqno));
 
-        dczc_ros1::TensorDescriptor msg;
+        axon_ros1::TensorDescriptor msg;
         msg.bo_handle = static_cast<uint64_t>(idx);
         msg.seqno = seqno;
         msg.pool_generation = pool->generation();
-        msg.capture_ts_ns = dczc::rt_now_ns();
-        msg.producer_publish_ts_ns = dczc::rt_now_ns();
+        msg.capture_ts_ns = axon::rt_now_ns();
+        msg.producer_publish_ts_ns = axon::rt_now_ns();
         msg.shape = {1u, static_cast<uint32_t>(bytes)};
         msg.rank = 2;
-        msg.dtype = static_cast<uint8_t>(dczc::DType::U8);
+        msg.dtype = static_cast<uint8_t>(axon::DType::U8);
         msg.offset = 0;
         msg.size = static_cast<uint64_t>(bytes);
         pub.publish(msg);

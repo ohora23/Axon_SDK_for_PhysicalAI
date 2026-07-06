@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — FD sidecar implementation (design doc §1.3)
+// axon — FD sidecar implementation (design doc §1.3)
 
-#include "dczc/detail/sidecar.h"
+#include "axon/detail/sidecar.h"
 
 #include <cerrno>
 #include <cstring>
@@ -14,7 +14,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-namespace dczc::detail {
+namespace axon::detail {
 
 namespace {
 
@@ -36,7 +36,7 @@ std::string sanitize(const std::string& service_name) {
 }  // namespace
 
 std::string sidecar_socket_path(const std::string& service_name) {
-    return "/tmp/dczc." + sanitize(service_name) + ".sock";
+    return "/tmp/axon." + sanitize(service_name) + ".sock";
 }
 
 // ---------------------------------------------------------------- primitives
@@ -343,4 +343,4 @@ int SidecarClient::poll_sync_fences(int timeout_ms,
 
 int SidecarClient::fd() const noexcept { return impl_->sock; }
 
-}  // namespace dczc::detail
+}  // namespace axon::detail

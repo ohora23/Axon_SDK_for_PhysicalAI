@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — TensorPublisher: publishes metadata via Iceoryx2 + delivers FDs via the sidecar.
+// axon — TensorPublisher: publishes metadata via Iceoryx2 + delivers FDs via the sidecar.
 
 #pragma once
 
 #include <memory>
 #include <string_view>
-#include "dczc/tensor_descriptor.h"
-#include "dczc/pool.h"
+#include "axon/tensor_descriptor.h"
+#include "axon/pool.h"
 
-namespace dczc {
+namespace axon {
 
 // View on a descriptor that the producer fills and then publishes.
 // The pool slot is locked for as long as the AcquiredDescriptor is alive.
@@ -57,4 +57,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace dczc
+}  // namespace axon

@@ -5,8 +5,8 @@
 // bytes prove the *same* kernel object crossed the boundary (true FD passing,
 // not a copy).
 
-#include "dczc/detail/sidecar.h"
-#include "dczc_test.h"
+#include "axon/detail/sidecar.h"
+#include "axon_test.h"
 
 #include <cerrno>
 #include <cstring>
@@ -17,7 +17,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-using namespace dczc::detail;
+using namespace axon::detail;
 
 namespace {
 
@@ -25,7 +25,7 @@ constexpr std::size_t kBufSize = 4096;
 
 // Create a memfd of kBufSize filled with `fill`.
 int make_filled_memfd(unsigned char fill) {
-    int fd = memfd_create("dczc_test", MFD_CLOEXEC);
+    int fd = memfd_create("axon_test", MFD_CLOEXEC);
     if (fd < 0) return -1;
     if (ftruncate(fd, kBufSize) < 0) { close(fd); return -1; }
     void* p = mmap(nullptr, kBufSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
@@ -52,7 +52,7 @@ struct WirePayload {
 
 }  // namespace
 
-DCZC_TEST(single_fd_roundtrip) {
+AXON_TEST(single_fd_roundtrip) {
     int fd = make_filled_memfd(0x5a);
     REQUIRE(fd >= 0);
 
@@ -82,7 +82,7 @@ DCZC_TEST(single_fd_roundtrip) {
     close(fd);
 }
 
-DCZC_TEST(bulk_fd_roundtrip) {
+AXON_TEST(bulk_fd_roundtrip) {
     const int N = 4;
     int fds[N];
     for (int i = 0; i < N; ++i) {
@@ -119,7 +119,7 @@ DCZC_TEST(bulk_fd_roundtrip) {
     for (int i = 0; i < N; ++i) close(fds[i]);
 }
 
-DCZC_TEST(too_many_fds_rejected) {
+AXON_TEST(too_many_fds_rejected) {
     int fd = make_filled_memfd(0x01);
     REQUIRE(fd >= 0);
     int sv[2];
@@ -130,18 +130,18 @@ DCZC_TEST(too_many_fds_rejected) {
     close(sv[0]); close(sv[1]); close(fd);
 }
 
-DCZC_TEST(pidfd_getfd_bad_args) {
+AXON_TEST(pidfd_getfd_bad_args) {
     // Bogus descriptors must fail cleanly, not crash.
     CHECK(pidfd_getfd_fallback(-1, -1) == -1);
 }
 
-DCZC_TEST(socket_path_sanitized) {
+AXON_TEST(socket_path_sanitized) {
     std::string p = sidecar_socket_path("camera/inference:out");
-    const std::string prefix = "/tmp/dczc.";
+    const std::string prefix = "/tmp/axon.";
     REQUIRE(p.rfind(prefix, 0) == 0);
     std::string tail = p.substr(prefix.size());  // service-derived portion
     CHECK(tail.find('/') == std::string::npos);   // slashes sanitized away
     CHECK(tail.find(':') == std::string::npos);   // colons too
 }
 
-DCZC_TEST_MAIN("sidecar")
+AXON_TEST_MAIN("sidecar")

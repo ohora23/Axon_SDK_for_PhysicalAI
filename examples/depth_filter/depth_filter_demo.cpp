@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc depth-filter demo — "depth sensor -> CPU filter -> zero-copy publish".
+// axon depth-filter demo — "depth sensor -> CPU filter -> zero-copy publish".
 //
 // Exercises the v2 imaging/depth metadata (row_pitch, depth_scale, units,
 // invalid_value, intrinsics) and the R4 validation path, with no camera:
@@ -24,13 +24,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "dczc/pool.h"
-#include "dczc/publisher.h"
-#include "dczc/subscriber.h"
-#include "dczc/rt.h"
-#include "dczc/detail/descriptor_util.h"
+#include "axon/pool.h"
+#include "axon/publisher.h"
+#include "axon/subscriber.h"
+#include "axon/rt.h"
+#include "axon/detail/descriptor_util.h"
 
-using namespace dczc;
+using namespace axon;
 
 namespace {
 
@@ -83,7 +83,7 @@ int run_consumer() {
                 v->intr_fx == 600.0f && v->intr_cx == W / 2.0f &&
                 v->intr_ref_width == W && v->intr_ref_height == H;
 
-            std::printf("\n────── dczc depth-filter demo (consumer) ──────\n");
+            std::printf("\n────── axon depth-filter demo (consumer) ──────\n");
             std::printf("  frame seqno:       %lu  (%ux%u U16 depth, pitch=%u)\n",
                         (unsigned long)v->seqno, W, H, v->row_pitch);
             std::printf("  zero-copy content: OK (seqno read back from dma-buf)\n");

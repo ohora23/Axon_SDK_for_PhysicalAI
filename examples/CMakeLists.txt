@@ -1,6 +1,6 @@
 # Examples.
 #   spike_poc — week 1-2 raw C PoC (V4L2 + SCM_RIGHTS)
-#   demo      — closed-loop demo + measurement harness on the public dczc API
+#   demo      — closed-loop demo + measurement harness on the public axon API
 
 # Conditional add_subdirectory so the tree configures cleanly even before
 # the spike PoC PR has landed.

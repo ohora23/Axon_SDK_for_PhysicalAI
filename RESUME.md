@@ -6,7 +6,7 @@
 
 ## 0. 프로젝트 한눈에
 
-- **이름**: `physicalAIRos` (GitHub 표시명) / 라이브러리 코드네임은 `dczc` (data-centric zero-copy)
+- **이름**: `physicalAIRos` (GitHub 표시명) / 라이브러리 코드네임은 `axon` (data-centric zero-copy)
 - **GitHub**: https://github.com/ohora23/physicalAIRos (private)
 - **무엇을 만드는가**: ROS2 + Iceoryx2 위에 **dma-buf FD 사이드채널 + 가속기 import 통합층**을 얹어 센서 → 가속기 → RT 제어 루프 끝단까지 zero-copy를 끊지 않는 SDK. bounded staleness가 7개 항 산식으로 측정·보장.
 - **상태 (2026-05-10 기준)**: 설계 단계. 1-2주차 Spike PoC 코드 push 완료. 보드 확보 + 실제 실행은 미수행.
@@ -139,14 +139,14 @@ PR에 자동으로 새 commit이 추가됩니다.
 - [ ] **USB UVC 카메라** 준비 (간단한 logitech 캠 정도면 충분)
 - [ ] Spike PoC 실제 실행:
   ```bash
-  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDCZC_BUILD_EXAMPLES=ON
+  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DAXON_BUILD_EXAMPLES=ON
   cmake --build build -j
 
   # Terminal A
-  ./build/examples/spike_poc/dczc_spike_producer /dev/video0
+  ./build/examples/spike_poc/axon_spike_producer /dev/video0
 
   # Terminal B
-  ./build/examples/spike_poc/dczc_spike_consumer
+  ./build/examples/spike_poc/axon_spike_consumer
   ```
 - [ ] 결과로 첫 타깃 플랫폼 확정 (`DesignFiles/diagrams.md` §12 결정 트리)
 
@@ -210,7 +210,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 
 # spike PoC 포함 (#3 머지된 후)
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDCZC_BUILD_EXAMPLES=ON
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DAXON_BUILD_EXAMPLES=ON
 cmake --build build -j
 ```
 

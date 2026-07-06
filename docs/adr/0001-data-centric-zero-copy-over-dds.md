@@ -33,8 +33,8 @@ Linux primitive. Transport cost becomes **O(1) in payload size**.
 ## Evidence (measured — RTX 5080 / Ryzen 9800X3D vs ROS2/Fast-RTPS)
 
 - **Latency**: single-stream 1 MiB — 46 µs vs 971 µs (**20.9×**); the gap widens with payload.
-- **CPU flat vs bandwidth**: 74 → 295 MB/s moved dczc 0.26 → 0.30 cores vs ROS2 0.77 → 0.98
-  (**3.3×** at 295 MB/s), with dczc dropping **0** frames vs ROS2's ~96.7 % worst stream.
+- **CPU flat vs bandwidth**: 74 → 295 MB/s moved axon 0.26 → 0.30 cores vs ROS2 0.77 → 0.98
+  (**3.3×** at 295 MB/s), with axon dropping **0** frames vs ROS2's ~96.7 % worst stream.
 - **Memory**: same delivered bytes → ROS2 spends **8.6×** the cache-misses, **5×** the
   instructions.
 

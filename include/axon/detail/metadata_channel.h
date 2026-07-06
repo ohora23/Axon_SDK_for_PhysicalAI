@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — Metadata plane (internal): pluggable backend interface
+// axon — Metadata plane (internal): pluggable backend interface
 //
 // The "metadata plane" from the design doc §1.1. `MetadataChannel` is an
 // abstract interface with two interchangeable backends — the design-doc promise
@@ -8,10 +8,10 @@
 //   - Seqlock  (default, always built): a single-slot, seqlock-protected
 //              TensorDescriptor in a POSIX shared-memory object (§3.3). No
 //              external dependency.
-//   - Iceoryx2 (opt-in, -DDCZC_WITH_ICEORYX2=ON): the real lock-free SHM queue,
+//   - Iceoryx2 (opt-in, -DAXON_WITH_ICEORYX2=ON): the real lock-free SHM queue,
 //              publish_subscribe<TensorDescriptor>.
 //
-// Backend selection at runtime via the DCZC_METADATA_BACKEND env var
+// Backend selection at runtime via the AXON_METADATA_BACKEND env var
 // ("seqlock" | "iceoryx2"); default is iceoryx2 when compiled in, else seqlock.
 //
 // Single-producer / multi-consumer "latest value wins" — exactly what the RT
@@ -22,9 +22,9 @@
 #include <cstdint>
 #include <string>
 
-#include "dczc/tensor_descriptor.h"
+#include "axon/tensor_descriptor.h"
 
-namespace dczc::detail {
+namespace axon::detail {
 
 class MetadataChannel {
 public:
@@ -51,4 +51,4 @@ public:
 // Exposed for the seqlock backend and its unit test.
 std::string metadata_shm_name(const std::string& service_name);
 
-}  // namespace dczc::detail
+}  // namespace axon::detail

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc — Python bindings (pybind11), design doc §7.2 (Phase 1).
+// axon — Python bindings (pybind11), design doc §7.2 (Phase 1).
 //
 // Exposes the public C++ API to Python with a NumPy-native surface:
 //   - producers publish a NumPy array (written into the pooled dma-buf)
 //   - consumers get a zero-copy, read-only NumPy view backed directly by the
 //     mmap'd dma-buf — no copy on the read path
 //
-// Build: -DDCZC_BUILD_PYTHON=ON  (import name: `dczc`).
+// Build: -DAXON_BUILD_PYTHON=ON  (import name: `axon`).
 
 #include <cstring>
 #include <optional>
@@ -17,18 +17,18 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "dczc/pool.h"
-#include "dczc/publisher.h"
-#include "dczc/rt.h"
-#include "dczc/subscriber.h"
-#include "dczc/types.h"
+#include "axon/pool.h"
+#include "axon/publisher.h"
+#include "axon/rt.h"
+#include "axon/subscriber.h"
+#include "axon/types.h"
 
 namespace py = pybind11;
-using namespace dczc;
+using namespace axon;
 
 namespace {
 
-// Map a dczc DType onto a NumPy dtype. BF16 has no native NumPy type, so it is
+// Map a axon DType onto a NumPy dtype. BF16 has no native NumPy type, so it is
 // surfaced as raw uint16 (bit-preserving) — callers reinterpret as needed.
 py::dtype numpy_dtype(DType t) {
     switch (t) {
@@ -57,8 +57,8 @@ struct PyView {
 
 }  // namespace
 
-PYBIND11_MODULE(dczc, m) {
-    m.doc() = "dczc — data-centric zero-copy for Physical AI (Python bindings)";
+PYBIND11_MODULE(axon, m) {
+    m.doc() = "axon — data-centric zero-copy for Physical AI (Python bindings)";
 
     py::enum_<DType>(m, "DType")
         .value("U8", DType::U8).value("U16", DType::U16).value("I16", DType::I16)

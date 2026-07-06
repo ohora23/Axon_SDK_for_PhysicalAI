@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""MockSystem over dczc: multi-stream producer/consumer, all metrics.
+"""MockSystem over axon: multi-stream producer/consumer, all metrics.
 
 Producer (parent) and consumer (child, forked before any threads) each run one
-thread per sensor stream. Every stream is an independent dczc service (own pool +
+thread per sensor stream. Every stream is an independent axon service (own pool +
 sidecar + metadata slot). Only the fixed-size descriptor crosses the metadata
 plane; the payload stays in the shared dma-buf.
 
 Emitted JSON: per-stream latency/delivery + aggregate throughput + CPU.
 
 Run (needs the built module on PYTHONPATH):
-    PYTHONPATH=build/python python3 benchmarks/mock/mock_dczc.py --scale 1 --seconds 5
+    PYTHONPATH=build/python python3 benchmarks/mock/mock_axon.py --scale 1 --seconds 5
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
 import mock_common as mc  # noqa: E402
 
-import dczc  # noqa: E402
+import axon  # noqa: E402
 
 
 def _service(name: str) -> str:
@@ -35,7 +35,7 @@ def _service(name: str) -> str:
 
 
 # A single RT-style control loop reads the latest of every stream each tick —
-# the dczc usage model (design doc §4.3: "RT consumer seqlock-reads on the next
+# the axon usage model (design doc §4.3: "RT consumer seqlock-reads on the next
 # tick"). One loop, not one thread per stream: realistic and fair on CPU.
 CONTROL_HZ = 1000
 
@@ -43,8 +43,8 @@ CONTROL_HZ = 1000
 def run_consumer(streams, seconds: float, result_path: str) -> int:
     subs = {}
     for s in streams:
-        sub = dczc.TensorSubscriber.create(_service(s.name))
-        sub.set_fallback_policy(dczc.FallbackPolicy.LastKnownGood)
+        sub = axon.TensorSubscriber.create(_service(s.name))
+        sub.set_fallback_policy(axon.FallbackPolicy.LastKnownGood)
         if sub.wait_handshake(8000) != 0:
             print(f"consumer: handshake failed for {s.name}", file=sys.stderr)
             return 11
@@ -84,10 +84,10 @@ def run_producer(streams, seconds: float, child_pid: int, result_path: str) -> d
     pubs = {}
     frames = {}
     for s in streams:
-        pool = dczc.TensorPool.create(
+        pool = axon.TensorPool.create(
             n_buffers=8, buffer_size=max(s.bytes, 4096),
-            backend=dczc.PoolBackend.Custom)
-        pub = dczc.TensorPublisher.create(_service(s.name), pool)
+            backend=axon.PoolBackend.Custom)
+        pub = axon.TensorPublisher.create(_service(s.name), pool)
         pubs[s.name] = (pool, pub)
         frames[s.name] = bytearray(s.bytes)
 
@@ -111,7 +111,7 @@ def run_producer(streams, seconds: float, child_pid: int, result_path: str) -> d
                 break
             seq += 1
             mc.stamp_header(frame, t0, seq)
-            pub.publish(arr, dczc.DType.U8)
+            pub.publish(arr, axon.DType.U8)
             sent[s.name] = seq
             dt = mc.monotonic_ns() - t0
             if dt < period_ns:
@@ -140,18 +140,18 @@ def run_producer(streams, seconds: float, child_pid: int, result_path: str) -> d
 
     total_cpu = producer_cpu + child["cpu_seconds"]
     _ = wall_s  # measured for reference; throughput/CPU normalize to `seconds`
-    return mc.aggregate(results, seconds, total_cpu, "dczc", 0)
+    return mc.aggregate(results, seconds, total_cpu, "axon", 0)
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="MockSystem over dczc")
+    p = argparse.ArgumentParser(description="MockSystem over axon")
     p.add_argument("--scale", type=int, default=1)
     p.add_argument("--seconds", type=float, default=5.0)
     p.add_argument("--json", type=str, default="")
     args = p.parse_args()
 
     streams = mc.scaled_profile(args.scale)
-    child_result = f"/tmp/mock_dczc_child_{os.getpid()}.json"
+    child_result = f"/tmp/mock_axon_child_{os.getpid()}.json"
 
     pid = os.fork()
     if pid == 0:

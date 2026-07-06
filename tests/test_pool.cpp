@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // TensorPool — Custom (memfd) backend always; UDMABUF when /dev/udmabuf exists.
 
-#include "dczc/pool.h"
-#include "dczc/types.h"
-#include "dczc_test.h"
+#include "axon/pool.h"
+#include "axon/types.h"
+#include "axon_test.h"
 
 #include <cstring>
 
@@ -12,7 +12,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-using namespace dczc;
+using namespace axon;
 
 namespace {
 bool have_udmabuf() {
@@ -21,7 +21,7 @@ bool have_udmabuf() {
 }
 }  // namespace
 
-DCZC_TEST(custom_backend_allocates_fds) {
+AXON_TEST(custom_backend_allocates_fds) {
     TensorPoolConfig cfg {};
     cfg.n_buffers = 8;
     cfg.buffer_size = 4096;
@@ -35,7 +35,7 @@ DCZC_TEST(custom_backend_allocates_fds) {
     for (int fd : pool->dma_buf_fds()) CHECK(fd >= 0);
 }
 
-DCZC_TEST(custom_backend_fds_are_mmappable_and_shared) {
+AXON_TEST(custom_backend_fds_are_mmappable_and_shared) {
     TensorPoolConfig cfg {};
     cfg.n_buffers = 2;
     cfg.buffer_size = 4096;
@@ -56,7 +56,7 @@ DCZC_TEST(custom_backend_fds_are_mmappable_and_shared) {
     munmap(b, 4096);
 }
 
-DCZC_TEST(ring_acquire_release) {
+AXON_TEST(ring_acquire_release) {
     TensorPoolConfig cfg {};
     cfg.n_buffers = 3;
     cfg.buffer_size = 4096;
@@ -76,7 +76,7 @@ DCZC_TEST(ring_acquire_release) {
     CHECK(pool->acquire_next() == b);   // freed slot comes back
 }
 
-DCZC_TEST(retire_bumps_generation) {
+AXON_TEST(retire_bumps_generation) {
     TensorPoolConfig cfg {};
     cfg.n_buffers = 4;
     cfg.buffer_size = 4096;
@@ -91,7 +91,7 @@ DCZC_TEST(retire_bumps_generation) {
     for (int fd : pool->dma_buf_fds()) CHECK(fd >= 0);
 }
 
-DCZC_TEST(udmabuf_backend_when_available) {
+AXON_TEST(udmabuf_backend_when_available) {
     if (!have_udmabuf()) {
         std::printf("    /dev/udmabuf absent — skipping (Custom backend covers the path)\n");
         return;
@@ -117,7 +117,7 @@ DCZC_TEST(udmabuf_backend_when_available) {
     }
 }
 
-DCZC_TEST(rejects_bad_config) {
+AXON_TEST(rejects_bad_config) {
     TensorPoolConfig cfg {};
     cfg.n_buffers = 0;
     cfg.buffer_size = 4096;
@@ -129,4 +129,4 @@ DCZC_TEST(rejects_bad_config) {
     CHECK(TensorPool::create(cfg) == nullptr);
 }
 
-DCZC_TEST_MAIN("pool")
+AXON_TEST_MAIN("pool")

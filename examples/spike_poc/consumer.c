@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// dczc Spike PoC — consumer
+// axon Spike PoC — consumer
 //   (SCM_RIGHTS receive + dma-buf mmap + zero-copy sanity check)
 //
 // Validation items:
@@ -23,7 +23,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define SOCKET_PATH  "/tmp/dczc_spike.sock"
+#define SOCKET_PATH  "/tmp/axon_spike.sock"
 #define WIRE_VERSION 1
 #define MAX_BUFFERS  32
 

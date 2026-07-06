@@ -62,7 +62,7 @@ perf.data.old
 *.svg.flamegraph
 
 # Spike PoC runtime sockets / temp files
-/tmp/dczc_*
+/tmp/axon_*
 spike-runs/
 *.bag
 

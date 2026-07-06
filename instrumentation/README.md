@@ -1,6 +1,6 @@
 # Hardware instrumentation — proving performance without a robot board
 
-These tools demonstrate dczc's core claims on **this development PC's own hardware**
+These tools demonstrate axon's core claims on **this development PC's own hardware**
 (RTX 5080 GPU, 16-core CPU, kernel tracing) — no robot/accelerator board required.
 Every run goes through a **resource harness** so verification never freezes the box.
 
@@ -8,10 +8,10 @@ Every run goes through a **resource harness** so verification never freezes the 
 
 | Demo | Proves | Privilege | Status |
 |---|---|---|---|
-| `gpu/gpu_sidecar_demo` | dczc sidecar carries a **real GPU memory handle** → zero-copy GPU↔GPU across processes | none | ✅ verified |
+| `gpu/gpu_sidecar_demo` | axon sidecar carries a **real GPU memory handle** → zero-copy GPU↔GPU across processes | none | ✅ verified |
 | `perf/run_pagefaults.sh` | RT loop adds **0 page faults/frame** (mlockall/MAP_POPULATE) | none | ✅ verified |
-| `perf/run_syscalls.sh` | dczc payload path is **0 transport syscalls/frame** vs ROS2's DDS | none | ✅ verified |
-| `perf/run_membw.sh` | ROS2 burns **8.6× the cache-misses** copying payloads; dczc doesn't | perf (paranoid≤1) | ✅ verified |
+| `perf/run_syscalls.sh` | axon payload path is **0 transport syscalls/frame** vs ROS2's DDS | none | ✅ verified |
+| `perf/run_membw.sh` | ROS2 burns **8.6× the cache-misses** copying payloads; axon doesn't | perf (paranoid≤1) | ✅ verified |
 | `ebpf/run_copy_compare.sh` | direct `copy_to_user` byte count | sudo (bpftrace) | tool |
 
 ## 0. Resource harness (freeze protection)
@@ -22,7 +22,7 @@ Every run goes through a **resource harness** so verification never freezes the 
 responsive.
 
 ```bash
-DCZC_CORES=0-5 DCZC_MEM=8G DCZC_TIMEOUT=120 instrumentation/run_bounded.sh <cmd...>
+AXON_CORES=0-5 AXON_MEM=8G AXON_TIMEOUT=120 instrumentation/run_bounded.sh <cmd...>
 ```
 
 Defaults on a 16-core box: 6 cores, 8 GB, 120 s. Everything below routes through it.
@@ -33,16 +33,16 @@ The RTX 5080 *is* an accelerator. This turns the "accelerator import backend (ne
 board)" roadmap item into a live demo on the discrete GPU.
 
 **Path:** a producer allocates CUDA VMM memory, a kernel fills it, the allocation is
-exported as a POSIX shareable FD, and that FD is delivered through dczc's SCM_RIGHTS
-sidecar (`dczc::detail::send_fds`). The consumer imports the *same physical GPU memory*
+exported as a POSIX shareable FD, and that FD is delivered through axon's SCM_RIGHTS
+sidecar (`axon::detail::send_fds`). The consumer imports the *same physical GPU memory*
 and a kernel verifies the payload — the tensor never leaves the GPU; only a 32-byte
 commit record crosses host↔device (for sync), never the payload. (design doc §2.3:
 `bo_handle` → GPU memory handle.)
 
 ```bash
-cmake -S . -B build && cmake --build build -j     # builds libdczc.a
+cmake -S . -B build && cmake --build build -j     # builds libaxon.a
 instrumentation/gpu/build.sh                        # nvcc → build/gpu_sidecar_demo
-DCZC_CORES=0-3 DCZC_TIMEOUT=40 instrumentation/run_bounded.sh \
+AXON_CORES=0-3 AXON_TIMEOUT=40 instrumentation/run_bounded.sh \
     ./build/gpu_sidecar_demo 8 200                  # 8 MB/frame × 200 frames
 ```
 
@@ -54,12 +54,12 @@ corrupt frames:      0
 host PAYLOAD copies:  0   (only a 32B commit record crosses host<->device)
 GPU data moved zero-copy: 1.68 GB across the process boundary
 commit->verify latency: mean=197.9us max=327.6us
-FD transport: dczc::detail::send_fds / recv_fds (SCM_RIGHTS sidecar)
+FD transport: axon::detail::send_fds / recv_fds (SCM_RIGHTS sidecar)
 ```
 
 > Note: `CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED` was 0 on this driver config, so the demo
 > uses CUDA VMM's POSIX shareable handle (also carried by the same sidecar). The proof —
-> a GPU memory handle crossing the process boundary via dczc's FD plane, zero payload
+> a GPU memory handle crossing the process boundary via axon's FD plane, zero payload
 > copy — is identical.
 
 ## 2. RT page faults = 0 per frame ✅
@@ -91,13 +91,13 @@ instrumentation/perf/run_syscalls.sh 1 2
 `strace -f -c` (no sudo) counts transport syscalls. **Verified** (scale 1, ~964 frames,
 8 streams):
 
-| | dczc | ROS2 (Fast-RTPS) |
+| | axon | ROS2 (Fast-RTPS) |
 |---|---|---|
 | total syscalls | **404** | 10,187 (**25×**) |
 | transport (send/recv msg+to+from) | **16** (one-time handshake) | 516 |
 | per-frame transport syscalls | **~0** (8 sendmsg / 964 frames) | ~0.5 |
 
-dczc publishes each frame with a seqlock store into shared memory — after the one-time FD
+axon publishes each frame with a seqlock store into shared memory — after the one-time FD
 handshake (8 sendmsg for 8 streams), the payload never touches a syscall. ROS2 runs the
 DDS machinery for every frame.
 
@@ -110,7 +110,7 @@ instrumentation/perf/run_membw.sh 2 4        # perf, no sudo when paranoid≤1
 `perf stat` compares cache/instruction cost for the same delivered bytes. **Verified**
 (scale 2 ≈ 148 MB/s, 4 s):
 
-| counter | dczc | ROS2 | ratio |
+| counter | axon | ROS2 | ratio |
 |---|---|---|---|
 | cache-references | 131 M | 925 M | 7.0× |
 | cache-misses | **15.0 M** | **128.2 M** | **8.6×** |
@@ -118,8 +118,8 @@ instrumentation/perf/run_membw.sh 2 4        # perf, no sudo when paranoid≤1
 | context-switches | 6,931 | 10,427 | 1.5× |
 
 ROS2 serializes+copies every payload (both sides), spending ~8.6× the cache-misses and
-~5× the instructions dczc does to move the same data. This is the memory-side companion to
-the CPU result in [`benchmarks/mock`](../benchmarks/mock/README.md) (dczc flat vs ROS2
+~5× the instructions axon does to move the same data. This is the memory-side companion to
+the CPU result in [`benchmarks/mock`](../benchmarks/mock/README.md) (axon flat vs ROS2
 3.3× CPU at scale 4).
 
 ## 5. Direct copy_to_user byte count (sudo — optional)
@@ -137,7 +137,7 @@ quantify the copy cost without it.
 A vision encoder (process A) produces an embedding on the GPU; an LLM (process B)
 must consume it. The naive cross-process path when two frameworks can't share GPU
 memory is `cudaMemcpy DtoH → socket → cudaMemcpy HtoD` — 2 copies, O(embedding
-size). With dczc the buffer is CUDA VMM memory shared once via the SCM_RIGHTS
+size). With axon the buffer is CUDA VMM memory shared once via the SCM_RIGHTS
 sidecar, so the encoder writes and the LLM reads **in place** (0 host copies, O(1)).
 
 ```bash
@@ -147,7 +147,7 @@ instrumentation/run_bounded.sh ./build/vlm_handoff_bench
 
 **Verified** (200 frames/size, real VLM embedding shapes):
 
-| embedding | dczc p50 | naive p50 | speedup |
+| embedding | axon p50 | naive p50 | speedup |
 |---|---|---|---|
 | DINOv2-L 257×1024 (0.5 MB) | 78 µs | 97 µs | 1.2× |
 | SigLIP-L 729×1152 (1.7 MB) | 106 µs | 274 µs | 2.6× |
@@ -156,7 +156,7 @@ instrumentation/run_bounded.sh ./build/vlm_handoff_bench
 
 ![VLM handoff](../docs/assets/07_vlm_handoff.png)
 
-dczc handoff is ~flat (~0.1 ms, the sync + verify) while the naive path grows
+axon handoff is ~flat (~0.1 ms, the sync + verify) while the naive path grows
 linearly with embedding size. At multimodal/video scale it's **36× faster** — this
 is the O(1)-vs-O(size) thesis in the VLM (= half of VLA) context. (`vlm_handoff_bench.cu`
 uses a kernel as the "encoder write" and real embedding sizes; transport cost is

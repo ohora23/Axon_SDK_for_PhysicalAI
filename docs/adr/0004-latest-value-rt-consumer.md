@@ -42,6 +42,6 @@ message" consumer also couples the control loop to producer rate and queue depth
 - **Seqlock retries ~0**: MockSystem seqlock-retry distribution measured p50/p99/max = 0 in
   steady state.
 - **Net effect**: despite paying for a 1 kHz polling loop that ROS2's event model skips,
-  dczc still used **3.3× less CPU** at 295 MB/s and dropped **0** frames.
+  axon still used **3.3× less CPU** at 295 MB/s and dropped **0** frames.
 
 Detail: [docs/hardware-verification.md](../hardware-verification.md) §2–§3, [benchmarks/mock](../../benchmarks/mock/README.md).

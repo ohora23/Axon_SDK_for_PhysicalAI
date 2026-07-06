@@ -39,6 +39,12 @@ public:
     // instead of lseek(SEEK_END), which some real dma-buf exporters reject).
     std::size_t buffer_size() const noexcept;
 
+    // Device pointer for an Accelerator-backed buffer (CUDA VMM). Returns
+    // nullptr for host-mapped backends (Custom/UDMABUF/V4L2) or an out-of-range
+    // index. Valid only in the process that owns the pool — consumers import
+    // the corresponding exported FD from dma_buf_fds() instead.
+    void* device_ptr(std::size_t index) const noexcept;
+
     // Acquire the next free buffer. Advances the ring by one slot.
     // The returned index maps into dma_buf_fds()[index].
     int acquire_next();

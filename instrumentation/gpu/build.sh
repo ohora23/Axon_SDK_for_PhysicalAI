@@ -17,10 +17,14 @@ if [ -z "$LIB" ]; then
     exit 1
 fi
 
-nvcc -O2 -std=c++17 -Wno-deprecated-gpu-targets \
-    -I "${REPO}/include" \
-    "${REPO}/instrumentation/gpu/gpu_sidecar_demo.cu" \
-    "$LIB" \
-    -lcuda -lrt -lpthread \
-    -o "$OUT"
-echo "built: $OUT"
+build_one() {  # $1 = source basename (no .cu), $2 = output name
+    nvcc -O2 -std=c++17 -Wno-deprecated-gpu-targets \
+        -I "${REPO}/include" \
+        "${REPO}/instrumentation/gpu/$1.cu" "$LIB" \
+        -lcuda -lrt -lpthread \
+        -o "${REPO}/build/$2"
+    echo "built: ${REPO}/build/$2"
+}
+
+build_one gpu_sidecar_demo   gpu_sidecar_demo
+build_one vlm_handoff_bench   vlm_handoff_bench

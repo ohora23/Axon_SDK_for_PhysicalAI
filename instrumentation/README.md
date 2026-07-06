@@ -132,6 +132,36 @@ sudo instrumentation/ebpf/run_copy_compare.sh 2 4
 tool that still needs root (bpftrace requires it); the §1–§4 results above already
 quantify the copy cost without it.
 
+## 6. VLM embedding handoff — encoder→LLM zero-copy (RTX 5080) ✅
+
+A vision encoder (process A) produces an embedding on the GPU; an LLM (process B)
+must consume it. The naive cross-process path when two frameworks can't share GPU
+memory is `cudaMemcpy DtoH → socket → cudaMemcpy HtoD` — 2 copies, O(embedding
+size). With dczc the buffer is CUDA VMM memory shared once via the SCM_RIGHTS
+sidecar, so the encoder writes and the LLM reads **in place** (0 host copies, O(1)).
+
+```bash
+instrumentation/gpu/build.sh                        # builds vlm_handoff_bench
+instrumentation/run_bounded.sh ./build/vlm_handoff_bench
+```
+
+**Verified** (200 frames/size, real VLM embedding shapes):
+
+| embedding | dczc p50 | naive p50 | speedup |
+|---|---|---|---|
+| DINOv2-L 257×1024 (0.5 MB) | 78 µs | 97 µs | 1.2× |
+| SigLIP-L 729×1152 (1.7 MB) | 106 µs | 274 µs | 2.6× |
+| hi-res 2048×2048 (8 MB) | 96 µs | 975 µs | 10.1× |
+| video 4×2048×2048 (34 MB) | 102 µs | 3710 µs | **36.3×** |
+
+![VLM handoff](../docs/assets/07_vlm_handoff.png)
+
+dczc handoff is ~flat (~0.1 ms, the sync + verify) while the naive path grows
+linearly with embedding size. At multimodal/video scale it's **36× faster** — this
+is the O(1)-vs-O(size) thesis in the VLM (= half of VLA) context. (`vlm_handoff_bench.cu`
+uses a kernel as the "encoder write" and real embedding sizes; transport cost is
+model-independent, so no pretrained model is needed.)
+
 ---
 
 *All demos are resource-bounded via `run_bounded.sh`. `perf` runs unprivileged once

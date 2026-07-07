@@ -1,5 +1,9 @@
 <!-- 이 파일(README.ko.md, 한국어)은 README.md(영어, 원본)의 번역본입니다. 어느 한쪽을 바꾸면 같은 커밋에서 두 파일을 함께 갱신하세요. -->
 
+<p align="center">
+  <img src="images/Axon_Drawing.png" alt="axon — 로봇 안의 데이터 백본: 복잡하고 흩어진 로봇 데이터를 신뢰할 수 있는 지능으로" width="880">
+</p>
+
 # Axon — Physical AI를 위한 데이터 중심 Zero-Copy
 
 [English](README.md) | **한국어**

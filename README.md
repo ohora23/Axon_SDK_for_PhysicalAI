@@ -1,5 +1,9 @@
 <!-- README.md (English) is the source of truth. When you change it, update README.ko.md in the SAME commit so the two stay in sync. -->
 
+<p align="center">
+  <img src="images/Axon_Drawing.png" alt="axon — The Data Backbone Inside Your Robot: turn complex, scattered robot data into reliable intelligence" width="880">
+</p>
+
 # Axon — Data-Centric Zero-Copy for Physical AI
 
 **English** | [한국어](README.ko.md)

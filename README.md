@@ -1,4 +1,8 @@
+<!-- README.md (English) is the source of truth. When you change it, update README.ko.md in the SAME commit so the two stay in sync. -->
+
 # Axon — Data-Centric Zero-Copy for Physical AI
+
+**English** | [한국어](README.ko.md)
 
 > **One-liner**: Not another middleware on top of ROS2. We extend the **sensor → accelerator → RT control loop** path with end-to-end zero-copy that doesn't break, and a **bounded staleness that is measured and guaranteed**.
 
@@ -354,6 +358,8 @@ Next:
 ## Contributing
 
 Working library, pre-alpha and moving fast. Issues, discussions, and PRs are welcome. The core has zero required dependencies and builds/tests green (9/9) on a stock Linux box — see [docs/usage.md](docs/usage.md) to get started.
+
+> **Docs are bilingual.** `README.md` (English) is the source of truth; `README.ko.md` (한국어) mirrors it. Edit **both in the same commit** when you change either.
 
 ## License
 

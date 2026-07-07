@@ -6,7 +6,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Platform: Linux + PREEMPT_RT](https://img.shields.io/badge/platform-Linux%20%2B%20PREEMPT__RT-success)]()
 
-> **Status**: working library + measured results. Core is built and tested (9/9); benchmarks, hardware verification, ROS1/ROS2 integration, and a VLM handoff demo all land on this dev PC (RTX 5080). See [Measured Results](#measured-results) and [docs/hardware-verification.md](docs/hardware-verification.md).
+> **Status**: working library + measured results. Core is built and tested (9/9); benchmarks, hardware verification, ROS1/ROS2 integration, a VLM handoff demo, and a cross-process GPU accelerator pool all land on this dev PC (RTX 5080). New here? See **[docs/usage.md](docs/usage.md)**, [Measured Results](#measured-results), and [docs/hardware-verification.md](docs/hardware-verification.md).
 
 ---
 
@@ -162,7 +162,7 @@ in [docs/adr/](docs/adr/).
 [ Live overlay of the metrics above ]
 ```
 
-Video drops after the first build (week 9-10).
+Closed-loop video demo pending a real sensor + robot board; the GPU/RT data path it exercises is already measured on this dev PC (see [Measured Results](#measured-results)).
 
 ---
 
@@ -174,7 +174,7 @@ suite build today:
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DAXON_BUILD_PYTHON=ON
 cmake --build build -j
-(cd build && ctest --output-on-failure)      # 8/8, warning-clean
+(cd build && ctest --output-on-failure)      # 9/9, warning-clean
 
 # axon vs ROS2 benchmarks (ROS2 optional)
 python3 benchmarks/mock/mock_compare.py --scales 1,2,3,4 --seconds 5
@@ -182,8 +182,12 @@ python3 benchmarks/mock/mock_compare.py --scales 1,2,3,4 --seconds 5
 instrumentation/gpu/build.sh && instrumentation/run_bounded.sh ./build/gpu_sidecar_demo 8 200
 ```
 
-Optional: `-DAXON_WITH_ICEORYX2=ON` for the Iceoryx2 metadata backend
-(see [docs/metadata-backends.md](docs/metadata-backends.md)).
+New here? Start with **[docs/usage.md](docs/usage.md)** — copy-paste producer/consumer,
+RT loop, Python, and GPU examples, each mapped to a tested demo.
+
+Optional feature flags (all default off — the core stays dependency-free):
+- `-DAXON_WITH_ICEORYX2=ON` — Iceoryx2 metadata backend ([docs/metadata-backends.md](docs/metadata-backends.md)).
+- `-DAXON_WITH_CUDA=ON` — `PoolBackend::Accelerator` CUDA VMM device pool for cross-process GPU zero-copy ([docs/usage.md §4](docs/usage.md#4-cross-process-gpu-zero-copy-accelerator-pool-r6)).
 
 ### Prerequisites
 
@@ -218,7 +222,11 @@ What the PoC validates:
 
 ---
 
-## API Preview (current header skeleton)
+## API at a glance
+
+The library is implemented and tested — not a skeleton. Full runnable examples
+(producer/consumer, RT loop, Python, GPU) are in **[docs/usage.md](docs/usage.md)**;
+here is the shape of it.
 
 ```cpp
 #include <axon/publisher.h>
@@ -229,16 +237,16 @@ What the PoC validates:
 auto pool = axon::TensorPool::create({
     .n_buffers   = 32,
     .buffer_size = 4 * 1024 * 1024,
-    .backend     = axon::PoolBackend::V4L2,
+    .backend     = axon::PoolBackend::Custom,   // Custom/UDMABUF/V4L2/Accelerator
+    .v4l2_device = nullptr,
 });
 auto pub = axon::TensorPublisher::create("camera/inference_out", *pool);
 pub->handshake_pool();  // SCM_RIGHTS bulk transfer
 
 while (running) {
-    auto desc = pub->acquire_descriptor();
-    fill_shape_dtype(desc, /*...*/);
-    // ... write inference output directly into the pool buffer ...
-    pub->publish(std::move(desc));
+    axon::AcquiredDescriptor a = pub->acquire_descriptor();
+    // ... write the frame straight into a.host_view, stamp a.desc ...
+    pub->publish(std::move(a));
 }
 
 // Consumer side (RT 1kHz loop)
@@ -246,7 +254,7 @@ auto sub = axon::TensorSubscriber::create("camera/inference_out");
 sub->wait_handshake();
 sub->set_fallback_policy(axon::FallbackPolicy::LastKnownGood);
 
-axon::rt_setup_memory_and_sched();  // mlockall + MAP_POPULATE + SCHED_FIFO
+axon::rt_setup_memory_and_sched();  // mlockall + prefault + SCHED_FIFO
 
 while (rt_tick()) {
     auto view = sub->latest_view(/*max_retry=*/8);
@@ -258,7 +266,7 @@ while (rt_tick()) {
 }
 ```
 
-[Full API](include/axon/) | [`TensorDescriptor` definition](DesignFiles/detailed_design_doc.md#112-tensordescriptor-definition-iceoryx2-payload)
+[Usage & examples](docs/usage.md) | [Full API headers](include/axon/) | [`TensorDescriptor` definition](DesignFiles/detailed_design_doc.md#112-tensordescriptor-definition-iceoryx2-payload)
 
 ---
 
@@ -307,6 +315,7 @@ Full method + raw numbers: [docs/hardware-verification.md](docs/hardware-verific
 
 | Document | Role |
 |---|---|
+| [`docs/usage.md`](docs/usage.md) | **Usage & examples** — copy-paste C++/Python/GPU snippets, each mapped to a tested demo |
 | [`DesignFiles/data-centric-zero-copy-design-20260510.md`](DesignFiles/data-centric-zero-copy-design-20260510.md) | Direction, differentiation, risk/mitigation (APPROVED v2) |
 | [`DesignFiles/detailed_design_doc.md`](DesignFiles/detailed_design_doc.md) | Mechanism details (14 sections, ~700 lines) |
 | [`DesignFiles/diagrams.md`](DesignFiles/diagrams.md) | 12 Mermaid diagrams |
@@ -319,24 +328,32 @@ Full method + raw numbers: [docs/hardware-verification.md](docs/hardware-verific
 
 ## Roadmap
 
-- [x] Office hours → differentiation, audience, scope locked in
-- [x] Design doc v2 (APPROVED, reviewer score 5/10 → projected 8/10)
-- [x] Mechanism detail document (~700 lines)
-- [x] System diagrams (12 Mermaid views)
-- [x] API header skeleton
-- [ ] Week 1-2 spike PoC validation (← **current**)
-- [ ] Week 4: TensorDescriptor + sidecar handshake formal implementation
-- [ ] Week 6: accelerator import backend
-- [ ] Week 8: RT consumer + closed-loop integration
-- [ ] Week 10: cyclictest 24h + eBPF zero-copy verification
-- [ ] Week 12: ROS2 baseline comparison benchmark
-- [ ] Week 14: public release + video + external demos
+Design → working library + measured results. Done (merged to `main`):
+
+- [x] Design doc v2, mechanism detail (~700 lines), 12 Mermaid diagrams
+- [x] Spike PoC — V4L2 `VIDIOC_EXPBUF` → `SCM_RIGHTS` → mmap'd zero-copy view
+- [x] Core library — sidecar (FD plane) + seqlock metadata + dma-buf pool + RT helpers + pub/sub
+- [x] Python bindings (zero-copy NumPy)
+- [x] Iceoryx2 lock-free SHM metadata backend (`AXON_WITH_ICEORYX2`)
+- [x] ROS2 single-stream + multi-stream (MockSystem) benchmarks
+- [x] Hardware verification on RTX 5080 — GPU zero-copy, page-faults, syscalls, perf/cache
+- [x] ROS1 payload offload (descriptor topic + sidecar, Docker)
+- [x] Depth wire v2 (row_pitch / depth_scale / intrinsics) + validation
+- [x] VLM encoder→LLM handoff benchmark (up to 36×)
+- [x] **R6 accelerator pool** — `PoolBackend::Accelerator` CUDA VMM device zero-copy (`AXON_WITH_CUDA`)
+
+Next:
+
+- [ ] R2 — sync-fence (CUDA event IPC) exposed in `latest_view` for producer→consumer ordering
+- [ ] Direction A — vision→LLM zero-copy VLA core (framework tensor ↔ axon handle bridge, Python GPU-array binding)
+- [ ] `cyclictest` 1 kHz jitter on a PREEMPT_RT kernel (needs the target board)
+- [ ] Accelerator formal backends (AMD XDNA / Jetson) + real sensor / real robot integration
 
 ---
 
 ## Contributing
 
-This is a design-stage project. Issues and discussions are welcome. PRs will start being accepted after the spike PoC validates.
+Working library, pre-alpha and moving fast. Issues, discussions, and PRs are welcome. The core has zero required dependencies and builds/tests green (9/9) on a stock Linux box — see [docs/usage.md](docs/usage.md) to get started.
 
 ## License
 

@@ -2,7 +2,7 @@
 <package format="2">
   <name>axon_ros1</name>
   <version>0.0.1</version>
-  <description>axon ROS1 offload PoC: descriptor topic + dma-buf SCM_RIGHTS sidecar (zero-copy payload).</description>
+  <description>axon ROS1 integration: descriptor-topic offload (M1) + a drop-in "axon" image_transport plugin (M2), both zero-copy via the dma-buf SCM_RIGHTS sidecar.</description>
   <maintainer email="ohora23@gmail.com">ohora23</maintainer>
   <license>Apache-2.0</license>
 
@@ -10,9 +10,20 @@
 
   <build_depend>roscpp</build_depend>
   <build_depend>std_msgs</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>image_transport</build_depend>
+  <build_depend>pluginlib</build_depend>
   <build_depend>message_generation</build_depend>
 
   <exec_depend>roscpp</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>image_transport</exec_depend>
+  <exec_depend>pluginlib</exec_depend>
   <exec_depend>message_runtime</exec_depend>
+
+  <!-- Register the "axon" image_transport plugin (M2). -->
+  <export>
+    <image_transport plugin="${prefix}/axon_transport_plugins.xml" />
+  </export>
 </package>

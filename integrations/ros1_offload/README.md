@@ -1,10 +1,16 @@
-# axon ROS1 offload (E-M1)
+# axon ROS1 integration (M1 offload + M2 image_transport plugin)
 
-Apply axon's zero-copy path to **ROS1** without rewriting to ROS2 — the "M1"
-method from the expansion analysis. ROS1's default TCPROS serializes and copies
-**every** message, even between nodes on the same host, so high-bandwidth topics
-(camera/LiDAR) are expensive. This PoC keeps ROS1 for the small stuff and moves
-the payload zero-copy underneath.
+Apply axon's zero-copy path to **ROS1** without rewriting to ROS2. ROS1's default
+TCPROS serializes and copies **every** message, even between nodes on the same
+host, so high-bandwidth topics (camera/LiDAR) are expensive. Two methods from the
+expansion analysis, both built on the reusable, ROS-agnostic `axon_bridge`
+(`include/axon_ros1/axon_bridge.h` — the pool + mmap + SCM_RIGHTS bootstrap):
+
+- **M1 — descriptor-topic offload** (`producer_node` / `consumer_node`): you
+  publish a small `TensorDescriptor` and read the payload by `bo_handle`.
+- **M2 — a drop-in `axon` `image_transport` transport**: any standard
+  `image_transport` publisher/subscriber gets zero-copy by selecting the `axon`
+  transport — no axon-specific code in your nodes.
 
 ## Idea
 
@@ -43,18 +49,44 @@ package (`axon_ros1`), then runs roscore + producer + consumer in one container.
 - A watchdog timer on the descriptor topic fires if the producer stalls (seqno
   stops advancing).
 
+## M2 — drop-in `axon` image_transport plugin
+
+```bash
+DEMO=transport integrations/ros1_offload/run.sh
+```
+
+The test nodes use only the **standard** `image_transport` API — no axon code:
+
+```cpp
+// publisher: offers every transport, including "axon"
+image_transport::Publisher pub = it.advertise("/camera/image", 1);
+// subscriber: picks the axon transport → pixels arrive via the dma-buf
+auto sub = it.subscribe("/camera/image", 5, cb, {}, image_transport::TransportHints("axon"));
+```
+
+Under the hood the `axon` transport publishes only an `AxonImage` descriptor on
+`/camera/image/axon` (no `data` array — verify with `rosmsg show`) and moves the
+pixels through the dma-buf sidecar. The service name is derived from the topic, so
+publisher and subscriber rendezvous with no config. Verified in-container:
+**232/232 frames delivered, 0 payload errors**, descriptor topic at full 30 Hz.
+
 ## Files
 
-- `catkin_ws/src/axon_ros1/msg/TensorDescriptor.msg` — the metadata-only message
-- `.../src/producer_node.cpp` — axon pool + `SidecarServer` + ROS publisher
-- `.../src/consumer_node.cpp` — `SidecarClient` (FDs) + ROS subscriber (zero-copy read) + watchdog
-- `Dockerfile` / `demo.sh` / `run.sh`
+- `.../include/axon_ros1/axon_bridge.h` — reusable, ROS-agnostic pool+mmap+sidecar bootstrap (shared by M1 nodes and the M2 plugin; a future ROS2 wrapper reuses it verbatim)
+- `.../msg/TensorDescriptor.msg`, `.../msg/AxonImage.msg` — the metadata-only messages
+- `.../src/producer_node.cpp`, `.../src/consumer_node.cpp` — M1 nodes
+- `.../src/axon_image_publisher.cpp`, `.../src/axon_image_subscriber.cpp` — M2 `image_transport` plugin (`axon` transport)
+- `.../src/image_pub_node.cpp`, `.../src/image_sub_node.cpp` — M2 test nodes (standard image_transport API only)
+- `.../axon_transport_plugins.xml` — pluginlib manifest
+- `Dockerfile` / `demo.sh` (M1) / `demo_transport.sh` (M2) / `run.sh`
 
 ## Limits (see the analysis doc)
 
 - **Single host only** — SCM_RIGHTS is same-host. Cross-machine links stay on TCPROS.
-- **True zero-copy at the callback boundary** would need a custom allocator so a
-  `sensor_msgs` pointer aliases the dma-buf; this PoC exposes the buffer via the
-  descriptor's `bo_handle` instead (the M2 `image_transport` plugin is the drop-in path).
+- **M2 boundary copies** — the plugin copies pixels into the pool (publisher) and
+  out into the `sensor_msgs::Image` the callback expects (subscriber). The
+  cross-process hop is still serialization-free via dma-buf; removing these last
+  copies needs a custom allocator that aliases the dma-buf (future work). M1
+  avoids them by having the producer write straight into the pool.
 - ROS1 (Noetic) is EOL; the value is letting legacy ROS1 fleets offload hot topics
   without a ROS2 migration.

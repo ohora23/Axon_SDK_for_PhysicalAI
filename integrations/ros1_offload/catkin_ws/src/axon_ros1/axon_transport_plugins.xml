@@ -1,0 +1,18 @@
+<library path="lib/libaxon_transport_plugins">
+  <class name="image_transport/axon_pub"
+         type="axon_transport::AxonPublisher"
+         base_class_type="image_transport::PublisherPlugin">
+    <description>
+      axon zero-copy image transport (publisher): pixels move cross-process via a
+      dma-buf pool + SCM_RIGHTS sidecar; only a small descriptor is published.
+    </description>
+  </class>
+  <class name="image_transport/axon_sub"
+         type="axon_transport::AxonSubscriber"
+         base_class_type="image_transport::SubscriberPlugin">
+    <description>
+      axon zero-copy image transport (subscriber): reads each frame straight from
+      the shared dma-buf delivered by the sidecar.
+    </description>
+  </class>
+</library>

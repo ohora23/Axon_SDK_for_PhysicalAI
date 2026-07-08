@@ -2,24 +2,21 @@
 // axon ROS1 offload — producer node.
 //
 // Publishes a small TensorDescriptor on a ROS1 topic (the metadata/liveness
-// plane) while the actual payload stays in a axon dma-buf pool and its FDs are
+// plane) while the actual payload stays in an axon dma-buf pool and its FDs are
 // delivered once through the axon SCM_RIGHTS sidecar (the FD plane). Each frame
 // only stamps a seqno into the shared buffer and publishes the descriptor — no
 // payload is serialized or copied through ROS.
+//
+// The pool + mmap + sidecar bootstrap lives in the reusable, ROS-agnostic
+// axon_bridge::Producer; this node is just the ROS glue over it.
 
 #include <cstring>
-#include <vector>
-
-#include <sys/mman.h>
-#include <unistd.h>
 
 #include <ros/ros.h>
 
-#include "axon/pool.h"
 #include "axon/rt.h"
-#include "axon/detail/sidecar.h"
-#include "axon/tensor_descriptor.h"   // kWireVersion
 #include "axon/types.h"
+#include "axon_ros1/axon_bridge.h"
 #include "axon_ros1/TensorDescriptor.h"
 
 int main(int argc, char** argv) {
@@ -31,23 +28,9 @@ int main(int argc, char** argv) {
     double rate_hz = nh.param("rate_hz", 30.0);
     std::string service = nh.param<std::string>("service", "ros1_offload");
 
-    // axon FD plane: a dma-buf pool + sidecar server.
-    auto pool = axon::TensorPool::create(
-        {static_cast<size_t>(n_buffers), static_cast<size_t>(bytes),
-         axon::PoolBackend::Custom, nullptr});
-    if (!pool) { ROS_FATAL("TensorPool::create failed"); return 1; }
-
-    const auto& fds = pool->dma_buf_fds();
-    std::vector<void*> host(fds.size(), nullptr);
-    for (size_t i = 0; i < fds.size(); ++i) {
-        host[i] = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fds[i], 0);
-        if (host[i] == MAP_FAILED) { ROS_FATAL("mmap pool buffer failed"); return 1; }
-    }
-
-    auto* server = axon::detail::SidecarServer::create(service);
-    if (!server) { ROS_FATAL("SidecarServer::create failed"); return 1; }
-    server->set_pool(fds, static_cast<uint32_t>(pool->generation()),
-                     static_cast<uint64_t>(bytes), axon::kWireVersion);
+    auto bridge = axon_bridge::Producer::create(
+        service, static_cast<size_t>(n_buffers), static_cast<size_t>(bytes));
+    if (!bridge) { ROS_FATAL("axon_bridge::Producer::create failed"); return 1; }
 
     ros::Publisher pub =
         nh.advertise<axon_ros1::TensorDescriptor>("/axon/tensor_desc", 10);
@@ -60,17 +43,17 @@ int main(int argc, char** argv) {
     uint64_t seqno = 0;
     while (ros::ok()) {
         // Non-blocking: deliver the pool FDs to any consumer that just connected.
-        server->accept_and_handshake(0);
+        bridge->poll_new_consumers();
 
         ++seqno;
-        int idx = static_cast<int>(seqno % fds.size());
+        int idx = static_cast<int>(seqno % bridge->buffer_count());
         // "Inference output": stamp the seqno into the shared buffer (offset 0).
-        std::memcpy(host[idx], &seqno, sizeof(seqno));
+        std::memcpy(bridge->buffer(idx), &seqno, sizeof(seqno));
 
         axon_ros1::TensorDescriptor msg;
         msg.bo_handle = static_cast<uint64_t>(idx);
         msg.seqno = seqno;
-        msg.pool_generation = pool->generation();
+        msg.pool_generation = bridge->pool_generation();
         msg.capture_ts_ns = axon::rt_now_ns();
         msg.producer_publish_ts_ns = axon::rt_now_ns();
         msg.shape = {1u, static_cast<uint32_t>(bytes)};
@@ -82,14 +65,11 @@ int main(int argc, char** argv) {
 
         if (seqno % 30 == 0)
             ROS_INFO("published seqno=%lu (buffer %d), consumers=%d",
-                     seqno, idx, server->connected_count());
+                     seqno, idx, bridge->connected_count());
 
         ros::spinOnce();
         rate.sleep();
     }
 
-    for (size_t i = 0; i < host.size(); ++i)
-        if (host[i] && host[i] != MAP_FAILED) munmap(host[i], bytes);
-    delete server;
-    return 0;
+    return 0;   // bridge dtor munmaps the pool and tears down the sidecar server
 }

@@ -11,13 +11,14 @@ find_package(catkin REQUIRED COMPONENTS roscpp std_msgs message_generation)
 add_message_files(FILES TensorDescriptor.msg)
 generate_messages(DEPENDENCIES std_msgs)
 
-catkin_package(CATKIN_DEPENDS roscpp std_msgs message_runtime)
+catkin_package(INCLUDE_DIRS include CATKIN_DEPENDS roscpp std_msgs message_runtime)
 
 # Prebuilt axon (headers + static lib) installed by the Dockerfile under /opt/axon.
 set(AXON_ROOT "/opt/axon" CACHE PATH "axon source/build root")
 set(AXON_LIB "${AXON_ROOT}/build/libaxon.a" CACHE FILEPATH "libaxon static lib")
 
-include_directories(${catkin_INCLUDE_DIRS} ${AXON_ROOT}/include)
+# include/ holds the reusable, ROS-agnostic axon_bridge.h shared by the nodes.
+include_directories(include ${catkin_INCLUDE_DIRS} ${AXON_ROOT}/include)
 
 foreach(node producer_node consumer_node)
   add_executable(${node} src/${node}.cpp)

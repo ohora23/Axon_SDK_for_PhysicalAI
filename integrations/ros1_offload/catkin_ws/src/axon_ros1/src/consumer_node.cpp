@@ -7,24 +7,22 @@
 // seqno the producer stamped there. Also demonstrates the ROS pattern this
 // enables: a per-message watchdog on the descriptor topic, plus a precise
 // staleness (now - producer_publish_ts) available on every message.
+//
+// The sidecar + mmap bootstrap lives in the reusable, ROS-agnostic
+// axon_bridge::Consumer; this node is just the ROS glue over it.
 
 #include <atomic>
 #include <cstring>
-#include <vector>
-
-#include <sys/mman.h>
-#include <unistd.h>
+#include <memory>
 
 #include <ros/ros.h>
 
 #include "axon/rt.h"
-#include "axon/detail/sidecar.h"
+#include "axon_ros1/axon_bridge.h"
 #include "axon_ros1/TensorDescriptor.h"
 
 namespace {
-std::vector<void*> g_views;
-uint64_t g_buffer_size = 0;
-uint32_t g_pool_generation = 0;
+std::unique_ptr<axon_bridge::Consumer> g_bridge;
 std::atomic<uint64_t> g_last_seen{0};
 uint64_t g_frames = 0, g_payload_errors = 0;
 uint64_t g_stale_sum_us = 0, g_stale_max_us = 0;
@@ -32,15 +30,15 @@ uint64_t g_stale_sum_us = 0, g_stale_max_us = 0;
 void on_desc(const axon_ros1::TensorDescriptor::ConstPtr& msg) {
     g_last_seen.store(msg->seqno, std::memory_order_relaxed);
 
-    if (msg->pool_generation != g_pool_generation) {
+    if (msg->pool_generation != g_bridge->pool_generation()) {
         ROS_WARN_THROTTLE(1.0, "pool_generation mismatch (%u vs %u) — re-handshake needed",
-                          msg->pool_generation, g_pool_generation);
+                          msg->pool_generation, g_bridge->pool_generation());
         return;
     }
-    if (msg->bo_handle >= g_views.size() || !g_views[msg->bo_handle]) return;
 
     // Zero-copy read: the payload never travelled through ROS.
-    const char* base = static_cast<const char*>(g_views[msg->bo_handle]) + msg->offset;
+    const void* base = g_bridge->payload(msg->bo_handle, msg->offset);
+    if (!base) return;
     uint64_t stamped = 0;
     std::memcpy(&stamped, base, sizeof(stamped));
     if (stamped != msg->seqno) ++g_payload_errors;
@@ -62,26 +60,11 @@ int main(int argc, char** argv) {
     std::string service = nh.param<std::string>("service", "ros1_offload");
     double watchdog_s = nh.param("watchdog_s", 0.5);
 
-    // axon FD plane: connect the sidecar and receive the pool FDs once.
-    auto* client = axon::detail::SidecarClient::create(service);
-    if (!client || client->connect(10000) != 0) {
-        ROS_FATAL("sidecar connect failed (is the producer up?)"); return 1;
-    }
-    axon::detail::PoolHandshakeHeader hdr{};
-    std::vector<int> fds;
-    if (client->recv_pool_handshake(&hdr, &fds, 10000) != 0) {
-        ROS_FATAL("sidecar pool handshake failed"); return 1;
-    }
-    g_buffer_size = hdr.buffer_size;
-    g_pool_generation = hdr.pool_generation;
-    g_views.assign(fds.size(), nullptr);
-    for (size_t i = 0; i < fds.size(); ++i) {
-        void* p = mmap(nullptr, g_buffer_size, PROT_READ,
-                       MAP_SHARED | MAP_POPULATE, fds[i], 0);
-        g_views[i] = (p == MAP_FAILED) ? nullptr : p;
-    }
-    ROS_INFO("sidecar handshake: %zu dma-buf FDs, %lu B each, pool_gen=%u — attached.",
-             fds.size(), g_buffer_size, g_pool_generation);
+    // axon FD plane: connect the sidecar and receive + mmap the pool FDs once.
+    g_bridge = axon_bridge::Consumer::create(service, 10000);
+    if (!g_bridge) { ROS_FATAL("sidecar handshake failed (is the producer up?)"); return 1; }
+    ROS_INFO("sidecar handshake: %zu dma-buf FDs, %zu B each, pool_gen=%u — attached.",
+             g_bridge->buffer_count(), g_bridge->buffer_size(), g_bridge->pool_generation());
 
     ros::Subscriber sub = nh.subscribe("/axon/tensor_desc", 50, on_desc);
 
@@ -111,7 +94,6 @@ int main(int argc, char** argv) {
                     g_frames, g_payload_errors, g_stale_sum_us / g_frames, g_stale_max_us);
         std::fflush(stdout);
     }
-    for (auto* v : g_views) if (v && v != MAP_FAILED) munmap(v, g_buffer_size);
-    delete client;
+    g_bridge.reset();   // munmap the views + close the sidecar client
     return 0;
 }

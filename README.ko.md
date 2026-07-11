@@ -331,7 +331,7 @@ A. Apache 2.0 (특허 그랜트 포함 — 로봇 산업 채택에 더 친화적
 - [x] Iceoryx2 lock-free SHM 메타데이터 백엔드 (`AXON_WITH_ICEORYX2`)
 - [x] ROS2 단일스트림 + 다중스트림(MockSystem) 벤치마크
 - [x] RTX 5080 하드웨어 검증 — GPU zero-copy, page-fault, syscall, perf/cache
-- [x] ROS1 payload offload (디스크립터 토픽 + 사이드카, Docker)
+- [x] ROS1 통합 — 디스크립터 토픽 offload(M1) **+ 드롭인 `axon` `image_transport` 플러그인(M2)**, ROS 비의존 공용 `axon_bridge` 위에 (Docker 검증: 232/232 프레임·복사 0)
 - [x] Depth wire v2 (row_pitch / depth_scale / intrinsics) + 검증
 - [x] VLM 인코더→LLM 핸드오프 벤치마크 (최대 36×)
 - [x] **R6 accelerator pool** — `PoolBackend::Accelerator` CUDA VMM device zero-copy (`AXON_WITH_CUDA`)

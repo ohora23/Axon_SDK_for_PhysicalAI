@@ -15,7 +15,10 @@
 namespace axon {
 
 struct TensorPoolConfig {
-    std::size_t n_buffers;     // Ring size (worst_case_inference_ms × rate × safety)
+    std::size_t n_buffers;     // Latest-value-wins ring depth. Size it so the
+                               // producer can't lap a consumer mid-read:
+                               // ceil(T_hold × f_produce) + M + margin.
+                               // See docs/usage.md "Delivery semantics".
     std::size_t buffer_size;   // Bytes per buffer
     PoolBackend backend;
     const char* v4l2_device;   // Used when backend == V4L2 (e.g. "/dev/video0")

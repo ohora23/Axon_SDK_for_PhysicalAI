@@ -123,6 +123,45 @@ caps. It's yours to use directly in safety logic.
 
 ---
 
+## Delivery semantics & choosing `n_buffers`
+
+axon is **latest-value-wins**, by design: `acquire_descriptor()` round-robins
+over the pool and overwrites the oldest slot, so the producer is **wait-free**
+(it never blocks on a slow consumer) and a consumer always reads the *freshest*
+frame — the right default for RT control, where a stale sample is worse than a
+skipped one. There is **no lossless / back-pressure mode**: axon does not
+guarantee a consumer observes every frame.
+
+Only the **descriptor** is seqlock-protected; the **payload buffer is not**. So
+if a consumer keeps using a view for longer than it takes the producer to lap
+the ring and rewrite that same slot, it can read a **torn frame**. `n_buffers`
+is what sizes that safety margin:
+
+```
+n_buffers  ≥  ceil( T_hold × f_produce ) + M + margin
+```
+
+- **`T_hold`** — the longest time a consumer keeps *touching* the buffer behind
+  one `latest_view()` (its read / copy-out / processing on that slot), in
+  seconds.
+- **`f_produce`** — producer publish rate (frames/s).
+- **`M`** — number of concurrent consumers each holding a view at once.
+- **`margin`** — 1–2 slots of headroom for jitter.
+
+Example: a 120 fps producer with a consumer that spends up to 20 ms on a frame
+and one extra recorder → `ceil(0.020 × 120) + 2 + 1 = 6`. The demos default to
+**4–8**, which covers typical single-host inference; raise it if a consumer does
+heavy per-frame work or you run many consumers. Cost is just RAM
+(`n_buffers × buffer_size`).
+
+**If you truly need every frame intact** (e.g. lossless recording), don't push
+back on the RT path — record the *raw topic* alongside axon. A recorder has to
+copy the bytes into its own store anyway, so it gains little from zero-copy;
+keeping it off the shared ring keeps the producer wait-free for the live
+consumers that do benefit.
+
+---
+
 ## 3. Python (zero-copy NumPy)
 
 The Python module is named `axon` (built with `-DAXON_BUILD_PYTHON=ON`; add

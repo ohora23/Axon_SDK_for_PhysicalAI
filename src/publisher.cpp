@@ -110,6 +110,9 @@ AcquiredDescriptor TensorPublisher::acquire_descriptor() {
         return a;
     }
     // Latest-value-wins ring: round-robin over the pool, overwriting the oldest.
+    // Deliberately wait-free — no slot ref-count / back-pressure (decided design;
+    // a slow consumer gets a fresher frame, never blocks the producer). Torn-frame
+    // safety is bought with ring depth, not locking — see docs/usage.md sizing.
     int idx = static_cast<int>(impl_->next_index % fds.size());
     impl_->next_index++;
 

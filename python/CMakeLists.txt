@@ -18,4 +18,12 @@ if(AXON_BUILD_TESTS)
     set_tests_properties(python_binding PROPERTIES
         TIMEOUT 60
         ENVIRONMENT "PYTHONPATH=$<TARGET_FILE_DIR:axon_python>")
+
+    # Device (GPU) CUDA-Array-Interface binding. SKIPs cleanly (exit 0) when the
+    # module was built without AXON_WITH_CUDA or no CUDA device is present.
+    add_test(NAME python_device_array
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_device_array.py)
+    set_tests_properties(python_device_array PROPERTIES
+        TIMEOUT 60
+        ENVIRONMENT "PYTHONPATH=$<TARGET_FILE_DIR:axon_python>")
 endif()

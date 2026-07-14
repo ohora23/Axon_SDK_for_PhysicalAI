@@ -8,6 +8,7 @@
 
 #include "axon/subscriber.h"
 
+#include <array>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -43,6 +44,39 @@ struct TensorSubscriber::Impl {
     std::uint64_t handshake_count = 0;
     std::uint64_t fallback_count = 0;
 
+    // ---- Sync-fence cache (R2, option B) ----
+    // drain_fences() (non-RT) fills this ring off the sidecar socket; latest_view()
+    // (RT) looks a descriptor's token up here with no syscall. Latest-value-wins:
+    // when the ring wraps, the superseded fence FD is closed (else it leaks). Ring
+    // size >> frames in flight for a single-host consumer; if a needed token was
+    // already evicted, lookup misses and latest_view() skips that frame.
+    struct FenceSlot { std::uint64_t token = 0; int fd = -1; };
+    static constexpr std::size_t kFenceRing = 16;
+    std::array<FenceSlot, kFenceRing> fences {};
+    std::size_t fence_next = 0;
+
+    void store_fence(std::uint64_t token, int fd) {
+        FenceSlot& slot = fences[fence_next];
+        if (slot.fd >= 0) ::close(slot.fd);  // evict the superseded fence
+        slot.token = token;
+        slot.fd = fd;
+        fence_next = (fence_next + 1) % kFenceRing;
+    }
+
+    int lookup_fence(std::uint64_t token) const noexcept {
+        for (const FenceSlot& s : fences) {
+            if (s.fd >= 0 && s.token == token) return s.fd;
+        }
+        return -1;
+    }
+
+    void close_fences() {
+        for (FenceSlot& s : fences) {
+            if (s.fd >= 0) { ::close(s.fd); s.fd = -1; }
+        }
+        fence_next = 0;
+    }
+
     void detach() {
         for (std::size_t i = 0; i < views.size(); ++i) {
             if (views[i] && views[i] != MAP_FAILED) ::munmap(views[i], buffer_size);
@@ -50,6 +84,7 @@ struct TensorSubscriber::Impl {
         for (int fd : fds) {
             if (fd >= 0) ::close(fd);   // non-RT owner closes (design doc §1.3.5)
         }
+        close_fences();   // fences belong to the retiring pool generation
         views.clear();
         fds.clear();
     }
@@ -111,6 +146,17 @@ int TensorSubscriber::wait_handshake(int timeout_ms) {
     return 0;
 }
 
+int TensorSubscriber::drain_fences() noexcept {
+    Impl& s = *impl_;
+    if (!s.client) return 0;
+    // Captureless lambda -> C function pointer; ctx carries the Impl. Timeout 0 =
+    // bounded, non-blocking drain, so the caller places the only syscall here.
+    auto sink = [](std::uint64_t token, int fd, void* ctx) {
+        static_cast<Impl*>(ctx)->store_fence(token, fd);
+    };
+    return s.client->poll_sync_fences(0, sink, &s);
+}
+
 std::optional<TensorView> TensorSubscriber::latest_view(int max_retry) noexcept {
     Impl& s = *impl_;
     if (!s.meta) return std::nullopt;
@@ -125,7 +171,16 @@ std::optional<TensorView> TensorSubscriber::latest_view(int max_retry) noexcept 
 
     if (ok && gen_ok) {
         std::size_t idx = static_cast<std::size_t>(desc.bo_handle);
-        if (idx < s.views.size()) {
+        // A fence-gated frame whose fence hasn't been drained yet may still be
+        // mid-write on the producer's accelerator — skip it (fall through to the
+        // fallback) rather than hand out a possibly-torn view.
+        int fence_fd = -1;
+        bool fence_ready = true;
+        if (desc.sync_fence_kind == SyncFenceKind::SyncFileViaSidecar) {
+            fence_fd = s.lookup_fence(desc.sync_fence_token);
+            fence_ready = (fence_fd >= 0);
+        }
+        if (fence_ready && idx < s.views.size()) {
             TensorView v {};
             void* base = s.views[idx];
             v.data = base ? static_cast<char*>(base) + desc.offset : nullptr;
@@ -135,7 +190,7 @@ std::optional<TensorView> TensorSubscriber::latest_view(int max_retry) noexcept 
             v.dtype = desc.dtype;
             v.staleness_ns = rt_now_ns() - desc.producer_publish_ts_ns;
             v.seqno = desc.seqno;
-            v.sync_fd = -1;  // fence surfacing via sidecar is deferred (see sidecar.cpp)
+            v.sync_fd = fence_fd;  // borrowed; owned by the fence ring
             v.seqlock_retries = retries;
 
             // v2 imaging/depth metadata — forward so the consumer can index
@@ -153,6 +208,7 @@ std::optional<TensorView> TensorSubscriber::latest_view(int max_retry) noexcept 
             v.intr_ref_height = desc.intr_ref_height;
 
             s.last_good = v;
+            s.last_good.sync_fd = -1;  // the stored copy owns no fence (already synced)
             s.last_good_publish_ts_ns = desc.producer_publish_ts_ns;
             s.have_last_good = true;
             return v;

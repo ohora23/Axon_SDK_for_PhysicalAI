@@ -335,10 +335,10 @@ A. Apache 2.0 (특허 그랜트 포함 — 로봇 산업 채택에 더 친화적
 - [x] Depth wire v2 (row_pitch / depth_scale / intrinsics) + 검증
 - [x] VLM 인코더→LLM 핸드오프 벤치마크 (최대 36×)
 - [x] **R6 accelerator pool** — `PoolBackend::Accelerator` CUDA VMM device zero-copy (`AXON_WITH_CUDA`)
+- [x] **R2 sync-fence** — 생산자→소비자 순서 보장을 위해 `sync_file` fence를 `latest_view`에 노출; 비-RT `drain_fences()`가 RT 읽기를 syscall-free로 유지(fence 도착 전 프레임은 스킵)
 
 다음:
 
-- [ ] R2 — 생산자→소비자 순서용 sync-fence(CUDA event IPC)를 `latest_view`에 노출
 - [ ] 방향 A — vision→LLM zero-copy VLA 코어 (프레임워크 텐서 ↔ axon 핸들 브리징, Python GPU 배열 바인딩)
 - [ ] PREEMPT_RT 커널에서 `cyclictest` 1 kHz 지터 (타깃 보드 필요)
 - [ ] 가속기 정식 백엔드 (AMD XDNA / Jetson) + 실 센서 / 실 로봇 통합

@@ -21,7 +21,8 @@ struct TensorView {
     DType             dtype;
     std::uint64_t     staleness_ns;  // Measured staleness (for RT safety analysis)
     SeqNo             seqno;
-    int               sync_fd;       // Fence FD when SyncFileViaSidecar, else -1
+    int               sync_fd;       // Fence FD (SyncFileViaSidecar) — borrowed,
+                                     // do NOT close; else -1. See drain_fences().
     int               seqlock_retries; // RT diagnostics (track P99 distribution)
 
     // ---- v2: imaging / depth metadata (forwarded from the descriptor) ----
@@ -47,13 +48,24 @@ public:
     // and performs accelerator import.
     int wait_handshake(int timeout_ms = 5000);
 
+    // Non-RT: drain any sync-fence FDs the producer delivered off the sidecar
+    // socket into an internal cache, so the next latest_view() can surface the
+    // fence in TensorView::sync_fd without a syscall. Call from the SAME thread
+    // as latest_view() — typically once per tick, right before it (that is how
+    // option B keeps the syscall out of latest_view). Returns the number of
+    // fences drained; a no-op returning 0 for producers that never set
+    // SyncFenceKind::SyncFileViaSidecar.
+    int drain_fences() noexcept;
+
     // Call from the RT loop. Reads the most recent descriptor via seqlock.
     // Applies the fallback policy when max_retry is exceeded.
     //
     // **RT-safety**:
     //   - No dynamic allocation
-    //   - No syscalls (assumes prior attach + mlockall + MAP_POPULATE)
-    //   - Even with sync_fd, polling is non-blocking
+    //   - No syscalls (assumes prior attach + mlockall + MAP_POPULATE, and that
+    //     any fence was already pulled in by a prior drain_fences())
+    //   - When a descriptor requires a fence not yet drained, the frame is
+    //     skipped (fallback) rather than handed out possibly-torn.
     std::optional<TensorView> latest_view(int max_retry = 8) noexcept;
 
     void set_fallback_policy(FallbackPolicy p) noexcept;

@@ -40,6 +40,29 @@ The producer and consumer are normally separate processes (see
 `tests/test_axon.py`, which forks them). `view.data` stays valid as long as the
 subscriber object is alive — the NumPy array holds the subscriber as its base.
 
+## GPU tensors (CUDA Array Interface)
+
+Built with `-DAXON_WITH_CUDA=ON`, an `Accelerator` pool holds **device** buffers.
+`pool.device_array(...)` exposes one as a `__cuda_array_interface__` object, so a
+framework (CuPy / PyTorch / Numba) can alias it **zero-copy** — no host staging:
+
+```python
+import axon, cupy as cp
+
+pool = axon.TensorPool.create(n_buffers=4, buffer_size=1024 * 4,
+                              backend=axon.PoolBackend.Accelerator)
+
+# Wrap pool buffer 0 as a GPU array the framework writes straight into.
+gpu = cp.asarray(pool.device_array(0, shape=[1024], dtype=axon.DType.F32))
+gpu[:] = cp.arange(1024, dtype=cp.float32)   # writes land in the shared buffer
+
+# pool.device_ptr(0) is the raw CUdeviceptr (int) if you need it directly.
+```
+
+This is the producer-side "framework tensor → axon buffer" bridge (Direction A).
+See `tests/test_device_array.py` (framework-free; also runs a CuPy round-trip
+when CuPy is present).
+
 ## Test
 
 ```bash

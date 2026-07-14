@@ -8,6 +8,7 @@
 //
 // Build: -DAXON_BUILD_PYTHON=ON  (import name: `axon`).
 
+#include <cstdint>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -45,6 +46,33 @@ py::dtype numpy_dtype(DType t) {
     return py::dtype("u1");
 }
 
+// __cuda_array_interface__ type strings (little-endian). BF16 has no CAI code,
+// so it is surfaced as raw uint16 (bit-preserving), mirroring numpy_dtype.
+std::string cai_typestr(DType t) {
+    switch (t) {
+        case DType::U8:   return "|u1";
+        case DType::U16:  return "<u2";
+        case DType::I16:  return "<i2";
+        case DType::F16:  return "<f2";
+        case DType::BF16: return "<u2";
+        case DType::F32:  return "<f4";
+        case DType::F64:  return "<f8";
+        case DType::I32:  return "<i4";
+        case DType::I64:  return "<i8";
+    }
+    return "|u1";
+}
+
+// A zero-copy handle to a device (GPU) pool buffer, exposed to Python via the
+// CUDA Array Interface so CuPy / PyTorch / Numba can wrap it without a copy.
+// The buffer is owned by the TensorPool; this is a borrowed view.
+struct PyDeviceArray {
+    std::uintptr_t ptr;             // CUdeviceptr as an integer
+    std::vector<py::ssize_t> shape;
+    DType dtype;
+    bool read_only;
+};
+
 // A Python-facing snapshot of a consumed frame.
 struct PyView {
     SeqNo         seqno;
@@ -68,7 +96,8 @@ PYBIND11_MODULE(axon, m) {
     py::enum_<PoolBackend>(m, "PoolBackend")
         .value("V4L2", PoolBackend::V4L2)
         .value("UDMABUF", PoolBackend::UDMABUF)
-        .value("Custom", PoolBackend::Custom);
+        .value("Custom", PoolBackend::Custom)
+        .value("Accelerator", PoolBackend::Accelerator);
 
     py::enum_<FallbackPolicy>(m, "FallbackPolicy")
         .value("LastKnownGood", FallbackPolicy::LastKnownGood)
@@ -102,8 +131,51 @@ PYBIND11_MODULE(axon, m) {
         .def("generation", &TensorPool::generation)
         .def("buffer_count",
              [](const TensorPool& p) { return p.dma_buf_fds().size(); })
+        .def("device_ptr",
+             [](const TensorPool& p, std::size_t index) {
+                 return reinterpret_cast<std::uintptr_t>(p.device_ptr(index));
+             },
+             py::arg("index"),
+             "Raw device pointer (CUdeviceptr as int) for an Accelerator-backed "
+             "buffer; 0 for host backends or an out-of-range index.")
+        .def("device_array",
+             [](TensorPool& p, std::size_t index, std::vector<py::ssize_t> shape,
+                DType dtype, bool read_only) {
+                 void* dp = p.device_ptr(index);
+                 if (!dp)
+                     throw std::runtime_error(
+                         "device_ptr is null — the pool is not Accelerator-backed "
+                         "(build -DAXON_WITH_CUDA=ON and use PoolBackend.Accelerator)");
+                 PyDeviceArray d{};
+                 d.ptr = reinterpret_cast<std::uintptr_t>(dp);
+                 d.shape = std::move(shape);
+                 d.dtype = dtype;
+                 d.read_only = read_only;
+                 return d;
+             },
+             py::arg("index"), py::arg("shape"), py::arg("dtype") = DType::U8,
+             py::arg("read_only") = false, py::keep_alive<0, 1>(),
+             "Wrap a device pool buffer as a __cuda_array_interface__ object so a "
+             "framework (CuPy/PyTorch/Numba) can alias it zero-copy.")
         .def("retire_and_reallocate", &TensorPool::retire_and_reallocate,
              py::arg("new_buffer_size"));
+
+    // ---- Device array (CUDA Array Interface) ----
+    py::class_<PyDeviceArray>(m, "DeviceArray")
+        .def_property_readonly("__cuda_array_interface__",
+            [](const PyDeviceArray& d) {
+                py::tuple shape(d.shape.size());
+                for (std::size_t i = 0; i < d.shape.size(); ++i)
+                    shape[i] = d.shape[i];
+                py::dict cai;
+                cai["shape"] = shape;
+                cai["typestr"] = cai_typestr(d.dtype);
+                cai["data"] = py::make_tuple(py::int_(d.ptr), d.read_only);
+                cai["strides"] = py::none();   // C-contiguous
+                cai["version"] = 3;
+                return cai;
+            },
+            "CUDA Array Interface v3 aliasing the device pool buffer.");
 
     // ---- TensorPublisher ----
     py::class_<TensorPublisher>(m, "TensorPublisher")

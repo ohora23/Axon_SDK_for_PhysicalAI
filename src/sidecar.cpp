@@ -188,10 +188,12 @@ SidecarServer* SidecarServer::create(const std::string& service_name) {
 void SidecarServer::set_pool(const std::vector<int>& fds,
                              std::uint32_t pool_generation,
                              std::uint64_t buffer_size,
-                             std::uint32_t wire_version) {
+                             std::uint32_t wire_version,
+                             std::uint8_t backend) {
     impl_->pool_fds = fds;
     impl_->header = PoolHandshakeHeader{};
     impl_->header.msg = static_cast<std::uint8_t>(SidecarMsg::PoolHandshake);
+    impl_->header.backend = backend;
     impl_->header.wire_version = wire_version;
     impl_->header.pool_generation = pool_generation;
     impl_->header.n_buffers = static_cast<std::uint32_t>(fds.size());

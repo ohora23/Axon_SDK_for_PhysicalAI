@@ -82,7 +82,8 @@ static_assert(sizeof(TensorDescriptor) == 144,
               "TensorDescriptor wire size changed — bump kWireVersion deliberately");
 
 // Wire version — bump on any wire-format change. Mismatched versions refuse to
-// communicate. v2 added the imaging/depth metadata block above.
-constexpr std::uint32_t kWireVersion = 2;
+// communicate. v2 added the imaging/depth metadata block above; v3 added the
+// pool backend byte to the sidecar PoolHandshakeHeader (host vs device import).
+constexpr std::uint32_t kWireVersion = 3;
 
 }  // namespace axon

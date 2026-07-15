@@ -14,7 +14,7 @@ AXON_TEST(abi_layout) {
     CHECK(sizeof(TensorDescriptor) <= 256);
     CHECK(sizeof(TensorDescriptor) == 144);   // wire v2 pinned size
     CHECK(alignof(TensorDescriptor) == 8);
-    CHECK(kWireVersion == 2);                  // v2: imaging/depth metadata
+    CHECK(kWireVersion == 3);                  // v3: pool backend byte in handshake
 }
 
 AXON_TEST(v2_depth_metadata_roundtrip) {

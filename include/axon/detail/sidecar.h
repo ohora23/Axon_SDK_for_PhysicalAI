@@ -32,7 +32,8 @@ enum class SidecarMsg : std::uint8_t {
 // Payload that accompanies a PoolHandshake (sent alongside the FD array).
 struct PoolHandshakeHeader {
     std::uint8_t  msg;              // == SidecarMsg::PoolHandshake
-    std::uint8_t  reserved0[3];
+    std::uint8_t  backend;         // PoolBackend — host-mmap vs device-import
+    std::uint8_t  reserved0[2];
     std::uint32_t wire_version;
     std::uint32_t pool_generation;
     std::uint32_t n_buffers;
@@ -78,7 +79,8 @@ public:
 
     // Cache the current pool bundle. Does not transmit on its own.
     void set_pool(const std::vector<int>& fds, std::uint32_t pool_generation,
-                  std::uint64_t buffer_size, std::uint32_t wire_version);
+                  std::uint64_t buffer_size, std::uint32_t wire_version,
+                  std::uint8_t backend);
 
     // Accept every consumer connection that is pending within `timeout_ms`
     // (0 = poll once, non-blocking) and send the cached bundle to each new

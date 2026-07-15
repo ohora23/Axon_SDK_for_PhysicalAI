@@ -233,6 +233,10 @@ std::size_t TensorPool::buffer_size() const noexcept {
     return impl_->buffer_size;
 }
 
+PoolBackend TensorPool::backend() const noexcept {
+    return impl_->cfg.backend;
+}
+
 void* TensorPool::device_ptr(std::size_t index) const noexcept {
     return index < impl_->buffers.size() ? impl_->buffers[index].device_ptr : nullptr;
 }

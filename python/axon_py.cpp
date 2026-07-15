@@ -80,7 +80,8 @@ struct PyView {
     int           seqlock_retries;
     DType         dtype;
     std::vector<std::uint32_t> shape;
-    py::array     data;  // zero-copy view backed by the subscriber's mmap
+    py::array     data;         // zero-copy host view (empty for a device frame)
+    std::uintptr_t device_ptr = 0;  // consumer device pointer (0 for host frames)
 };
 
 }  // namespace
@@ -221,7 +222,38 @@ PYBIND11_MODULE(axon, m) {
             },
             py::arg("array"), py::arg("dtype") = DType::U8,
             "Publish a NumPy array as the next frame.")
+        .def("acquire",
+            [](TensorPublisher& pub) { return pub.acquire_descriptor(); },
+            "Acquire the next pool buffer. Use acquired.buffer_index to select "
+            "the device_array (or host buffer) to fill, then publish_device(). "
+            "One frame in flight: do not acquire again before publishing.")
+        .def("publish_device",
+            [](TensorPublisher& pub, AcquiredDescriptor& a,
+               std::vector<std::uint32_t> shape, DType dtype) {
+                if (a.buffer_index < 0)
+                    throw std::runtime_error("no writable pool buffer available");
+                std::uint64_t count = 1;
+                a.desc->rank = static_cast<std::uint8_t>(
+                    shape.size() > kMaxRank ? kMaxRank : shape.size());
+                for (std::uint8_t i = 0; i < a.desc->rank; ++i) {
+                    a.desc->shape[i] = shape[i];
+                    count *= shape[i];
+                }
+                a.desc->dtype = dtype;
+                a.desc->offset = 0;
+                a.desc->size = count * dtype_size(dtype);
+                a.desc->sync_fence_kind = SyncFenceKind::None;
+                pub.publish(std::move(a));
+            },
+            py::arg("acquired"), py::arg("shape"), py::arg("dtype"),
+            "Publish a device frame already written into "
+            "pool.device_array(acquired.buffer_index). No host copy.")
         .def("reannounce_pool", &TensorPublisher::reannounce_pool);
+
+    // ---- AcquiredDescriptor (returned by acquire) ----
+    py::class_<AcquiredDescriptor>(m, "AcquiredDescriptor")
+        .def_readonly("buffer_index", &AcquiredDescriptor::buffer_index,
+                      "Pool ring index of the acquired buffer.");
 
     // ---- View (returned by latest_view) ----
     py::class_<PyView>(m, "TensorView")
@@ -231,7 +263,27 @@ PYBIND11_MODULE(axon, m) {
         .def_readonly("dtype", &PyView::dtype)
         .def_readonly("shape", &PyView::shape)
         .def_readonly("data", &PyView::data,
-                      "Zero-copy, read-only NumPy view over the dma-buf.");
+                      "Zero-copy, read-only NumPy view over the dma-buf (empty "
+                      "for a device-backed frame — use __cuda_array_interface__).")
+        .def_readonly("device_ptr", &PyView::device_ptr,
+                      "Consumer device pointer (int) for an Accelerator frame; "
+                      "0 for a host frame.")
+        .def_property_readonly("__cuda_array_interface__",
+            [](const PyView& pv) -> py::object {
+                if (pv.device_ptr == 0) return py::none();  // host frame
+                py::tuple shape(pv.shape.size());
+                for (std::size_t i = 0; i < pv.shape.size(); ++i)
+                    shape[i] = static_cast<py::ssize_t>(pv.shape[i]);
+                py::dict cai;
+                cai["shape"] = shape;
+                cai["typestr"] = cai_typestr(pv.dtype);
+                cai["data"] = py::make_tuple(py::int_(pv.device_ptr), true);  // read-only
+                cai["strides"] = py::none();
+                cai["version"] = 3;
+                return cai;
+            },
+            "CUDA Array Interface v3 over the consumer device buffer, or None "
+            "for a host frame.");
 
     // ---- TensorSubscriber ----
     py::class_<TensorSubscriber>(m, "TensorSubscriber")
@@ -260,6 +312,7 @@ PYBIND11_MODULE(axon, m) {
                 pv.staleness_ns = v->staleness_ns;
                 pv.seqlock_retries = v->seqlock_retries;
                 pv.dtype = v->dtype;
+                pv.device_ptr = reinterpret_cast<std::uintptr_t>(v->device_ptr);
 
                 std::vector<py::ssize_t> np_shape;
                 std::uint64_t count = 1;

@@ -42,6 +42,10 @@ public:
     // instead of lseek(SEEK_END), which some real dma-buf exporters reject).
     std::size_t buffer_size() const noexcept;
 
+    // The backend this pool was created with (conveyed to consumers so they
+    // know whether to host-mmap or device-import the shared FDs).
+    PoolBackend backend() const noexcept;
+
     // Device pointer for an Accelerator-backed buffer (CUDA VMM). Returns
     // nullptr for host-mapped backends (Custom/UDMABUF/V4L2) or an out-of-range
     // index. Valid only in the process that owns the pool — consumers import

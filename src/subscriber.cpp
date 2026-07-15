@@ -16,9 +16,11 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "axon/detail/accelerator.h"
 #include "axon/detail/descriptor_util.h"
 #include "axon/detail/metadata_channel.h"
 #include "axon/detail/sidecar.h"
+#include "axon/pool.h"
 #include "axon/rt.h"
 
 namespace axon {
@@ -30,9 +32,15 @@ struct TensorSubscriber::Impl {
     detail::MetadataChannel* meta = nullptr;
 
     std::vector<int>   fds;          // received dma-buf FDs (owned)
-    std::vector<void*> views;        // mmap of each FD (or nullptr)
+    std::vector<void*> views;        // host mmap of each FD (or nullptr)
     std::uint64_t      buffer_size = 0;
     std::uint32_t      pool_generation = 0;
+
+    // Device (Accelerator) path: imported per-buffer device pointers + the
+    // AccelBuffer handles used to release them. Empty for host backends.
+    bool device_backed = false;
+    std::vector<void*> device_ptrs;
+    std::vector<detail::AccelBuffer> accel_bufs;
 
     FallbackPolicy fallback = FallbackPolicy::LastKnownGood;
 
@@ -81,11 +89,20 @@ struct TensorSubscriber::Impl {
         for (std::size_t i = 0; i < views.size(); ++i) {
             if (views[i] && views[i] != MAP_FAILED) ::munmap(views[i], buffer_size);
         }
+#if AXON_WITH_CUDA
+        for (auto& ab : accel_bufs) detail::accel_free(&ab);  // unmap device memory
+#endif
         for (int fd : fds) {
             if (fd >= 0) ::close(fd);   // non-RT owner closes (design doc §1.3.5)
         }
         close_fences();   // fences belong to the retiring pool generation
+        // The cached good frame aliases buffers we just freed — invalidate it so
+        // a post-detach fallback can't hand back a dangling data/device_ptr.
+        have_last_good = false;
         views.clear();
+        device_ptrs.clear();
+        accel_bufs.clear();
+        device_backed = false;
         fds.clear();
     }
 };
@@ -117,23 +134,45 @@ int TensorSubscriber::wait_handshake(int timeout_ms) {
     if (s.client->recv_pool_handshake(&hdr, &received, timeout_ms) < 0) return -1;
     if (hdr.wire_version != kWireVersion) { errno = EPROTO; return -1; }
 
-    // Attach: cache FDs and mmap each as a zero-copy host view. Prefault so the
-    // first RT access never faults (design doc §3.2).
+    // Attach: cache FDs, then either host-mmap (UMA backends) or device-import
+    // (Accelerator) each buffer as a zero-copy view.
     s.detach();
     s.fds = std::move(received);
     s.buffer_size = hdr.buffer_size;
     s.pool_generation = hdr.pool_generation;
-    s.views.resize(s.fds.size(), nullptr);
-    for (std::size_t i = 0; i < s.fds.size(); ++i) {
-        void* p = ::mmap(nullptr, s.buffer_size, PROT_READ,
-                         MAP_SHARED | MAP_POPULATE, s.fds[i], 0);
-        if (p == MAP_FAILED) {
-            // Some V4L2 drivers refuse direct dma-buf mmap; the accelerator-import
-            // path (deferred) is the general answer. Leave the view null.
-            s.views[i] = nullptr;
-        } else {
-            s.views[i] = p;
-            rt_prefault_dma_buf_view(p, s.buffer_size);
+    s.device_backed =
+        (hdr.backend == static_cast<std::uint8_t>(PoolBackend::Accelerator));
+
+    if (s.device_backed) {
+#if AXON_WITH_CUDA
+        // The shared FDs are CUDA VMM POSIX handles, not host-mappable dma-bufs —
+        // import each into this process' address space as a device pointer.
+        s.device_ptrs.assign(s.fds.size(), nullptr);
+        s.accel_bufs.assign(s.fds.size(), detail::AccelBuffer{});
+        for (std::size_t i = 0; i < s.fds.size(); ++i) {
+            detail::AccelBuffer ab{};
+            if (detail::accel_import(s.fds[i], s.buffer_size, &ab)) {
+                s.accel_bufs[i] = ab;
+                s.device_ptrs[i] = ab.device_ptr;
+            }  // else leave null — latest_view falls back for that buffer
+        }
+#else
+        // GPU pool but this build has no CUDA support — cannot consume it.
+        errno = ENOTSUP;
+        return -1;
+#endif
+    } else {
+        s.views.resize(s.fds.size(), nullptr);
+        for (std::size_t i = 0; i < s.fds.size(); ++i) {
+            void* p = ::mmap(nullptr, s.buffer_size, PROT_READ,
+                             MAP_SHARED | MAP_POPULATE, s.fds[i], 0);
+            if (p == MAP_FAILED) {
+                // Some V4L2 drivers refuse direct dma-buf mmap. Leave the view null.
+                s.views[i] = nullptr;
+            } else {
+                s.views[i] = p;
+                rt_prefault_dma_buf_view(p, s.buffer_size);
+            }
         }
     }
 
@@ -180,10 +219,14 @@ std::optional<TensorView> TensorSubscriber::latest_view(int max_retry) noexcept 
             fence_fd = s.lookup_fence(desc.sync_fence_token);
             fence_ready = (fence_fd >= 0);
         }
-        if (fence_ready && idx < s.views.size()) {
+        const std::size_t nbufs = s.device_backed ? s.device_ptrs.size()
+                                                   : s.views.size();
+        if (fence_ready && idx < nbufs) {
             TensorView v {};
-            void* base = s.views[idx];
-            v.data = base ? static_cast<char*>(base) + desc.offset : nullptr;
+            void* base = s.device_backed ? s.device_ptrs[idx] : s.views[idx];
+            char* p = base ? static_cast<char*>(base) + desc.offset : nullptr;
+            v.data       = s.device_backed ? nullptr : p;
+            v.device_ptr = s.device_backed ? p : nullptr;
             v.accel_handle = AcceleratorHandle{nullptr, PoolBackend::Custom, s.buffer_size};
             v.shape.rank = desc.rank;
             for (std::uint8_t i = 0; i < kMaxRank; ++i) v.shape.dims[i] = desc.shape[i];

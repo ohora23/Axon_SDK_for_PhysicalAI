@@ -26,6 +26,40 @@ CUmemAllocationProp device_prop() {
     return p;
 }
 
+// Round a byte size up to the device allocation granularity. 0 on failure.
+// Deterministic on a given device, so a producer and importer that pass the
+// same requested size derive the same mapping size.
+std::size_t aligned_size(std::size_t size) {
+    CUmemAllocationProp prop = device_prop();
+    std::size_t gran = 0;
+    if (!ck(cuMemGetAllocationGranularity(&gran, &prop, CU_MEM_ALLOC_GRANULARITY_MINIMUM)) ||
+        gran == 0)
+        return 0;
+    return ((size + gran - 1) / gran) * gran;
+}
+
+// Reserve an address range, map `h` into it, and grant device RW access. On any
+// failure, undoes its own steps and returns false; on success *out_ptr is the
+// mapped device pointer. The caller owns `h` and releases it on failure.
+bool map_rw(CUmemGenericAllocationHandle h, std::size_t sz, CUdeviceptr* out_ptr) {
+    CUdeviceptr ptr = 0;
+    if (!ck(cuMemAddressReserve(&ptr, sz, 0, 0, 0)) || !ck(cuMemMap(ptr, sz, 0, h, 0))) {
+        if (ptr) cuMemAddressFree(ptr, sz);
+        return false;
+    }
+    CUmemAccessDesc acc = {};
+    acc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+    acc.location.id = 0;
+    acc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+    if (!ck(cuMemSetAccess(ptr, sz, &acc, 1))) {
+        cuMemUnmap(ptr, sz);
+        cuMemAddressFree(ptr, sz);
+        return false;
+    }
+    *out_ptr = ptr;
+    return true;
+}
+
 }  // namespace
 
 bool accel_init() {
@@ -42,30 +76,21 @@ bool accel_init() {
 bool accel_alloc(std::size_t size, AccelBuffer* out) {
     if (!out || size == 0 || !accel_init()) return false;
 
-    CUmemAllocationProp prop = device_prop();
-    std::size_t gran = 0;
-    if (!ck(cuMemGetAllocationGranularity(&gran, &prop, CU_MEM_ALLOC_GRANULARITY_MINIMUM)) ||
-        gran == 0)
-        return false;
-    std::size_t sz = ((size + gran - 1) / gran) * gran;
+    std::size_t sz = aligned_size(size);
+    if (sz == 0) return false;
 
+    CUmemAllocationProp prop = device_prop();
     CUmemGenericAllocationHandle h = 0;
     if (!ck(cuMemCreate(&h, sz, &prop, 0))) return false;
 
     CUdeviceptr ptr = 0;
-    if (!ck(cuMemAddressReserve(&ptr, sz, 0, 0, 0)) || !ck(cuMemMap(ptr, sz, 0, h, 0))) {
+    if (!map_rw(h, sz, &ptr)) {
         cuMemRelease(h);
         return false;
     }
 
-    CUmemAccessDesc acc = {};
-    acc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-    acc.location.id = 0;
-    acc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-
     int fd = -1;
-    if (!ck(cuMemSetAccess(ptr, sz, &acc, 1)) ||
-        !ck(cuMemExportToShareableHandle(&fd, h, CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR, 0))) {
+    if (!ck(cuMemExportToShareableHandle(&fd, h, CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR, 0))) {
         cuMemUnmap(ptr, sz);
         cuMemAddressFree(ptr, sz);
         cuMemRelease(h);
@@ -74,6 +99,31 @@ bool accel_alloc(std::size_t size, AccelBuffer* out) {
 
     out->device_ptr = reinterpret_cast<void*>(static_cast<std::uintptr_t>(ptr));
     out->export_fd = fd;
+    out->aligned = sz;
+    out->handle = static_cast<unsigned long long>(h);
+    return true;
+}
+
+bool accel_import(int export_fd, std::size_t size, AccelBuffer* out) {
+    if (!out || export_fd < 0 || size == 0 || !accel_init()) return false;
+
+    std::size_t sz = aligned_size(size);
+    if (sz == 0) return false;
+
+    CUmemGenericAllocationHandle h = 0;
+    if (!ck(cuMemImportFromShareableHandle(
+            &h, reinterpret_cast<void*>(static_cast<std::intptr_t>(export_fd)),
+            CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)))
+        return false;
+
+    CUdeviceptr ptr = 0;
+    if (!map_rw(h, sz, &ptr)) {
+        cuMemRelease(h);
+        return false;
+    }
+
+    out->device_ptr = reinterpret_cast<void*>(static_cast<std::uintptr_t>(ptr));
+    out->export_fd = -1;   // caller owns the received FD; accel_free won't close it
     out->aligned = sz;
     out->handle = static_cast<unsigned long long>(h);
     return true;

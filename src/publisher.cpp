@@ -97,7 +97,8 @@ std::unique_ptr<TensorPublisher> TensorPublisher::create(
 int TensorPublisher::handshake_pool() {
     impl_->server->set_pool(impl_->pool->dma_buf_fds(),
                             static_cast<std::uint32_t>(impl_->pool->generation()),
-                            impl_->buffer_size, kWireVersion);
+                            impl_->buffer_size, kWireVersion,
+                            static_cast<std::uint8_t>(impl_->pool->backend()));
     return impl_->server->accept_and_handshake(kHandshakeWaitMs);
 }
 
@@ -154,7 +155,8 @@ void TensorPublisher::publish(AcquiredDescriptor&& d, int sync_fd) {
     // non-blocking); they receive the current pool bundle.
     impl_->server->set_pool(impl_->pool->dma_buf_fds(),
                             static_cast<std::uint32_t>(impl_->pool->generation()),
-                            impl_->buffer_size, kWireVersion);
+                            impl_->buffer_size, kWireVersion,
+                            static_cast<std::uint8_t>(impl_->pool->backend()));
     impl_->server->accept_and_handshake(0);
 }
 
@@ -162,7 +164,8 @@ int TensorPublisher::reannounce_pool() {
     impl_->map_views();  // FDs changed after a retire/reallocate
     impl_->server->set_pool(impl_->pool->dma_buf_fds(),
                             static_cast<std::uint32_t>(impl_->pool->generation()),
-                            impl_->buffer_size, kWireVersion);
+                            impl_->buffer_size, kWireVersion,
+                            static_cast<std::uint8_t>(impl_->pool->backend()));
     int n = impl_->server->broadcast_pool();
     n += impl_->server->accept_and_handshake(0);
     return n;

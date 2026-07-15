@@ -27,6 +27,12 @@ bool accel_init();
 // Allocate one device buffer >= size, mapped + exported. false on any failure.
 bool accel_alloc(std::size_t size, AccelBuffer* out);
 
+// Import a device buffer from a producer's POSIX shareable handle (the export FD
+// received over the sidecar), mapping it into this process. out->export_fd is
+// left at -1: the caller owns the received FD's lifetime, so accel_free() will
+// not close it (avoids a double-close). false on any failure.
+bool accel_import(int export_fd, std::size_t size, AccelBuffer* out);
+
 // Unmap + free the buffer and close its export FD. Safe on a zeroed buffer.
 void accel_free(AccelBuffer* b);
 

@@ -20,3 +20,16 @@ endforeach()
 # The concurrency and e2e tests spawn threads / child processes; give them room.
 set_tests_properties(test_seqlock     PROPERTIES TIMEOUT 60)
 set_tests_properties(test_end_to_end  PROPERTIES TIMEOUT 60)
+
+# A-2 cross-process GPU zero-copy e2e. Needs the CUDA VMM backend (built with
+# AXON_WITH_CUDA) and a real device, so register with ctest only under the
+# opt-in AXON_TEST_CUDA (mirrors the accelerator_pool demo).
+if(AXON_WITH_CUDA)
+    add_executable(test_accel_e2e test_accel_e2e.cpp)
+    target_link_libraries(test_accel_e2e PRIVATE axon CUDA::cuda_driver)
+    target_include_directories(test_accel_e2e PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    if(AXON_TEST_CUDA)
+        add_test(NAME test_accel_e2e COMMAND test_accel_e2e)
+        set_tests_properties(test_accel_e2e PROPERTIES TIMEOUT 60)
+    endif()
+endif()

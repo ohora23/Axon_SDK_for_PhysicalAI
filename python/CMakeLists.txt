@@ -26,4 +26,12 @@ if(AXON_BUILD_TESTS)
     set_tests_properties(python_device_array PROPERTIES
         TIMEOUT 60
         ENVIRONMENT "PYTHONPATH=$<TARGET_FILE_DIR:axon_python>")
+
+    # Consumer-side device import + CUDA-Array-Interface roundtrip (A-2). Also
+    # SKIPs cleanly without CUDA.
+    add_test(NAME python_device_consumer
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_device_consumer.py)
+    set_tests_properties(python_device_consumer PROPERTIES
+        TIMEOUT 60
+        ENVIRONMENT "PYTHONPATH=$<TARGET_FILE_DIR:axon_python>")
 endif()

@@ -15,7 +15,10 @@
 namespace axon {
 
 struct TensorView {
-    void*             data;          // dma-buf host mmap region (UMA)
+    void*             data;          // dma-buf host mmap region (UMA); null for a
+                                     // device-backed (Accelerator) frame
+    void*             device_ptr;    // consumer-imported device pointer (CUdeviceptr)
+                                     // for an Accelerator frame; null for host frames
     AcceleratorHandle accel_handle;  // Accelerator import handle (relevant on NUMA)
     Shape             shape;
     DType             dtype;

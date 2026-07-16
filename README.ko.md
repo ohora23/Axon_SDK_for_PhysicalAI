@@ -367,6 +367,7 @@ A. Apache 2.0 (특허 그랜트 포함 — 로봇 산업 채택에 더 친화적
 - [x] ROS2 단일스트림 + 다중스트림(MockSystem) 벤치마크
 - [x] RTX 5080 하드웨어 검증 — GPU zero-copy, page-fault, syscall, perf/cache
 - [x] ROS1 통합 — 디스크립터 토픽 offload(M1) **+ 드롭인 `axon` `image_transport` 플러그인(M2)**, ROS 비의존 공용 `axon_bridge` 위에 (Docker 검증: 232/232 프레임·복사 0)
+- [x] **ROS2 통합** — *동일한* `axon_bridge` 위의 디스크립터 토픽 offload, 네이티브 ROS2 Jazzy(`integrations/ros2_offload/`): 페이로드는 dma-buf에 머물고 디스크립터만 DDS로, 메시지별 상한 staleness(평균 ~160 µs). 90/90 프레임·복사 0
 - [x] Depth wire v2 (row_pitch / depth_scale / intrinsics) + 검증
 - [x] VLM 인코더→LLM 핸드오프 벤치마크 (최대 36×)
 - [x] **R6 accelerator pool** — `PoolBackend::Accelerator` CUDA VMM device zero-copy (`AXON_WITH_CUDA`)

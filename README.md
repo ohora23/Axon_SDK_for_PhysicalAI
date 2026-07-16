@@ -386,6 +386,7 @@ Design → working library + measured results. Done (merged to `main`):
 - [x] ROS2 single-stream + multi-stream (MockSystem) benchmarks
 - [x] Hardware verification on RTX 5080 — GPU zero-copy, page-faults, syscalls, perf/cache
 - [x] ROS1 integration — descriptor-topic offload (M1) **+ drop-in `axon` `image_transport` plugin (M2)**, on a reusable ROS-agnostic `axon_bridge` (Docker-verified: 232/232 frames, 0 payload copies)
+- [x] **ROS2 integration** — descriptor-topic offload on the *same* `axon_bridge`, native ROS2 Jazzy (`integrations/ros2_offload/`): payload stays in the dma-buf, only the descriptor rides DDS, with per-message bounded staleness (mean ~160 µs). 90/90 frames, 0 payload copies
 - [x] Depth wire v2 (row_pitch / depth_scale / intrinsics) + validation
 - [x] VLM encoder→LLM handoff benchmark (up to 36×)
 - [x] **R6 accelerator pool** — `PoolBackend::Accelerator` CUDA VMM device zero-copy (`AXON_WITH_CUDA`)

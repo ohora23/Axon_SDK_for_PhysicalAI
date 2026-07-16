@@ -44,7 +44,7 @@ def run_consumer() -> int:
             if cai["typestr"] != "<f4":
                 return 16
             ptr, read_only = cai["data"]
-            if ptr != v.device_ptr or read_only is not True:
+            if ptr != v.device_ptr or read_only is not False:
                 return 17
             if cai["strides"] is not None:
                 return 18

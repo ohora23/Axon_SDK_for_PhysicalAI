@@ -350,10 +350,10 @@ Design → working library + measured results. Done (merged to `main`):
 - [x] VLM encoder→LLM handoff benchmark (up to 36×)
 - [x] **R6 accelerator pool** — `PoolBackend::Accelerator` CUDA VMM device zero-copy (`AXON_WITH_CUDA`)
 - [x] **R2 sync-fence** — `sync_file` fence surfaced in `latest_view` for producer→consumer ordering; non-RT `drain_fences()` keeps the RT read syscall-free (fence-gated frame skipped until its fence arrives)
+- [x] **Direction A — vision→LLM zero-copy** — framework tensor ↔ axon GPU buffer via `__cuda_array_interface__` on both the producer (`device_array`) and the consumer (`latest_view`), plus consumer-side CUDA VMM import. Working two-process demo (`examples/vla_demo/`: DeiT-tiny → axon → GPT-2 prefill, same GPU pointer both sides, no host copy)
 
 Next:
 
-- [ ] Direction A — vision→LLM zero-copy VLA core (framework tensor ↔ axon handle bridge, Python GPU-array binding)
 - [ ] `cyclictest` 1 kHz jitter on a PREEMPT_RT kernel (needs the target board)
 - [ ] Accelerator formal backends (AMD XDNA / Jetson) + real sensor / real robot integration
 

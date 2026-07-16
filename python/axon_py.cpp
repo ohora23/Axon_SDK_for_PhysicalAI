@@ -277,7 +277,9 @@ PYBIND11_MODULE(axon, m) {
                 py::dict cai;
                 cai["shape"] = shape;
                 cai["typestr"] = cai_typestr(pv.dtype);
-                cai["data"] = py::make_tuple(py::int_(pv.device_ptr), true);  // read-only
+                // read_only=False: the imported device buffer is RW-mapped, and
+                // frameworks (torch) reject a read-only CUDA-array-interface.
+                cai["data"] = py::make_tuple(py::int_(pv.device_ptr), false);
                 cai["strides"] = py::none();
                 cai["version"] = 3;
                 return cai;

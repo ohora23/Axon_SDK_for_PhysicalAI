@@ -66,6 +66,41 @@ flowchart LR
 
 ---
 
+## 왜 axon인가 — 대안들과 무엇이 다른가
+
+프로세스 간 GPU zero-copy 공유는 **새로운 기술이 아닙니다.** 표준 부품(dma-buf,
+CUDA VMM, `__cuda_array_interface__`/DLPack) 위에 서 있고, 성숙한 시스템들이 이미
+이걸 합니다. axon의 승부수는 그 시스템들이 차지하지 않은 **특정한 패키징**입니다:
+
+- 🔌 **프레임워크·벤더 중립.** GStreamer·ROS·고정 오퍼레이터 그래프에 묶이지
+  않습니다. 그냥 `device_ptr` / CUDA-array-interface를 내주므로, **같은 전송**이
+  PyTorch 모델도 하드웨어 NVENC 인코더도 먹입니다 —
+  [`examples/vla_demo/`](examples/vla_demo/)(DeiT-tiny → GPT-2, 양쪽 동일 GPU 포인터),
+  [`examples/nvenc_flywheel/`](examples/nvenc_flywheel/)(공유 GPU 버퍼에서 바로 녹화).
+- ⏱️ **실시간 latest-value-wins.** seqlock 평면 + **측정·공식으로 상한이 보장되는
+  staleness** + 백프레셔 없음 — *가장 신선한* 샘플을 원하는 제어 루프용. 대부분의
+  대안은 무손실 큐를 최적화합니다.
+- 🪶 **얇고 감사 가능** — 오후 한나절이면 읽는 코어, 수년짜리 프레임워크가 아님.
+
+**비교** (가장 가까운 것들 — 전체 분석은 **[docs/positioning.md](docs/positioning.md)**):
+
+| 솔루션 | 프로세스 간 GPU zero-copy | 결합도 | 전달 모델 |
+|---|---|---|---|
+| **axon** | ✅ (CUDA VMM) | **없음** — `device_ptr` / CAI | **latest-value-wins, 상한 staleness** |
+| NVIDIA Isaac ROS / NITROS | ✅ | ROS 2 + NVIDIA | ROS pub/sub |
+| NVIDIA DeepStream | ✅ | GStreamer + NVIDIA | 파이프라인 / 큐 |
+| Iceoryx2 / eCAL | ❌ 호스트 SHM만 | 없음 | 큐 |
+| ROS 2 + DDS | ❌ 호스트 SHM만 | DDS / ROS | 큐 / history |
+
+**정직한 범위**: axon은 pre-alpha이고 단일 호스트 전용입니다. NVIDIA 프레임워크들은
+프로덕션급이고 노드를 넘으며 훨씬 많은 기능을 갖췄습니다. axon은 그 폭을 내주는 대신
+중립성·RT 최신값 의미론·작은 코어를 택합니다. **단일 호스트에서 프레임워크 중립적인
+zero-copy 전송을 RT 소비자에게** 주고 싶으면 axon을, **벤더가 밀어주는 올인원
+파이프라인**을 원하면 Isaac ROS / DeepStream / Holoscan을 고르세요. 자세한 결정
+가이드: **[docs/positioning.md](docs/positioning.md)**.
+
+---
+
 ## 핵심 아이디어 (60초)
 
 ROS2 + Iceoryx2 연동은 **메시지 미들웨어 레벨**에서 zero-copy를 제공한다. 메시지는 복사 없이 RAM까지 도달할 수 있지만, 그것을 가속기(NPU/GPU)에 올리려면 대개 또 한 번의 복사가 필요하다.

@@ -66,6 +66,46 @@ Full detail in [Measured Results](#measured-results); the staleness guarantee is
 
 ---
 
+## Why axon — and how it differs from the alternatives
+
+Zero-copy GPU sharing across processes is **not new** — it is built on standard
+primitives (dma-buf, CUDA VMM, `__cuda_array_interface__`/DLPack), and mature
+systems already do it. axon's bet is a **specific packaging** those systems don't
+occupy:
+
+- 🔌 **Framework- and vendor-neutral.** Not tied to GStreamer, ROS, or a fixed
+  operator graph. It hands out a plain `device_ptr` / CUDA-array-interface, so the
+  **same transport** feeds a PyTorch model *and* a hardware NVENC encoder —
+  see [`examples/vla_demo/`](examples/vla_demo/) (DeiT-tiny → GPT-2, same GPU
+  pointer both sides) and [`examples/nvenc_flywheel/`](examples/nvenc_flywheel/)
+  (record straight from the shared GPU buffer).
+- ⏱️ **Real-time latest-value-wins.** A seqlock plane with a **measured,
+  formula-bounded staleness** and no back-pressure — built for a control loop that
+  wants the *freshest* sample, where most alternatives optimise for a lossless
+  queue.
+- 🪶 **Thin and auditable** — a core you can read in an afternoon, not a multi-year
+  framework.
+
+**How it compares** (closest analogs — full analysis in
+**[docs/positioning.md](docs/positioning.md)**):
+
+| Solution | GPU zero-copy across procs | Coupling | Delivery model |
+|---|---|---|---|
+| **axon** | ✅ (CUDA VMM) | **none** — `device_ptr` / CAI | **latest-value-wins, bounded staleness** |
+| NVIDIA Isaac ROS / NITROS | ✅ | ROS 2 + NVIDIA | ROS pub/sub |
+| NVIDIA DeepStream | ✅ | GStreamer + NVIDIA | pipeline / queue |
+| Iceoryx2 / eCAL | ❌ host SHM only | none | queue |
+| ROS 2 + DDS | ❌ host SHM only | DDS / ROS | queue / history |
+
+**Honest scope**: axon is pre-alpha and single-host; the NVIDIA frameworks are
+production-grade, span nodes, and carry far more features. axon trades that breadth
+for neutrality, RT-latest-value semantics, and a small core. Pick it when you want
+one framework-neutral zero-copy transport on a single host for an RT consumer; pick
+Isaac ROS / DeepStream / Holoscan when you want a batteries-included, vendor-backed
+pipeline. Details and the decision guide: **[docs/positioning.md](docs/positioning.md)**.
+
+---
+
 ## The Pitch (60 seconds)
 
 ROS2 + Iceoryx2 integrations provide zero-copy at the **message middleware level**. A message can reach RAM zero-copy, but moving it onto an accelerator (NPU/GPU) typically requires another copy.

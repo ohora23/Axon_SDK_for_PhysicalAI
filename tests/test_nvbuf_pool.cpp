@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // TensorPool — NvBufSurface backend e2e (Jetson only).
 //
-// Verifies:
+// Built only with AXON_ENABLE_JETSON. Verifies:
 //   pool_basics — allocate a NvBufSurface pool and check geometry / FDs / row_pitch.
 //   cross_process_host_view — fork; producer writes per-row patterns, consumer
 //   reads back through the existing host-mmap path.
+//   cross_process_device_view (AXON_WITH_CUDA) — consumer reads the same frame
+//   through latest_view()->device_ptr (NvBufSurfaceImport → EGL → CUDA).
 
 #include "axon/pool.h"
 #include "axon/publisher.h"
@@ -14,6 +16,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -21,6 +24,10 @@
 #include <unistd.h>
 
 #include <linux/videodev2.h>
+
+#if AXON_WITH_CUDA
+#include <cuda.h>
+#endif
 
 using namespace axon;
 
@@ -78,7 +85,6 @@ int run_consumer() {
 
 }  // namespace
 
-#if AXON_ENABLE_JETSON
 AXON_TEST(pool_basics) {
     TensorPoolConfig c {};
     c.n_buffers    = 4;
@@ -167,7 +173,109 @@ AXON_TEST(cross_process_host_view) {
     CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
+
+#if AXON_WITH_CUDA
+const char* kServiceCuda = "e2e/nvbuf_pool_cuda";
+
+AXON_TEST(cross_process_device_view) {
+    TensorPoolConfig c {};
+    c.n_buffers    = kNBuffers;
+    c.buffer_size  = 0;
+    c.backend      = PoolBackend::NvBufSurface;
+    c.v4l2_device  = nullptr;
+    c.width        = kWidth;
+    c.height       = kHeight;
+    c.fourcc       = kFourcc;
+
+    pid_t pid = fork();
+    REQUIRE(pid >= 0);
+
+    if (pid == 0) {
+        // Child = consumer
+        cuInit(0);
+        CUdevice dev;
+        cuDeviceGet(&dev, 0);
+        CUcontext ctx;
+        cuDevicePrimaryCtxRetain(&ctx, dev);
+        cuCtxSetCurrent(ctx);
+
+        auto sub = TensorSubscriber::create(kServiceCuda);
+        if (!sub) _exit(10);
+        if (sub->wait_handshake(4000) != 0) _exit(11);
+
+        std::uint64_t seen = 0;
+        bool content_ok = false;
+        for (int i = 0; i < 4000; ++i) {
+            auto v = sub->latest_view(8);
+            if (v && v->seqno >= kFrames && v->data && v->device_ptr) {
+                seen = v->seqno;
+                const std::uint32_t rp = v->row_pitch;
+                // Copy row_pitch*2 bytes from device to host.
+                std::vector<std::uint8_t> dev_buf(rp * 2);
+                cuMemcpyDtoH(dev_buf.data(),
+                             reinterpret_cast<CUdeviceptr>(v->device_ptr),
+                             rp * 2);
+                const std::uint8_t* host = static_cast<const std::uint8_t*>(v->data);
+                // Compare first 1280 bytes of row 0 and row 1.
+                content_ok = (memcmp(host, dev_buf.data(), 1280) == 0 &&
+                              memcmp(host + rp, dev_buf.data() + rp, 1280) == 0);
+            }
+            if (seen >= kFrames) break;
+            sleep_ms(1);
+        }
+        if (seen < kFrames) _exit(14);
+        if (!content_ok) _exit(15);
+        _exit(0);
+    }
+
+    // Parent = producer
+    auto pool = TensorPool::create(c);
+    REQUIRE(pool != nullptr);
+
+    auto pub = TensorPublisher::create(kServiceCuda, *pool);
+    REQUIRE(pub != nullptr);
+
+    int accepted = pub->handshake_pool();
+    CHECK(accepted >= 1);
+
+    // Verify device_ptr is non-null after fork.
+    CHECK(pool->device_ptr(0) != nullptr);
+
+    std::uint32_t rp = pool->row_pitch();
+
+    for (int s = 1; s <= kFrames; ++s) {
+        AcquiredDescriptor a = pub->acquire_descriptor();
+        REQUIRE(a.buffer_index >= 0);
+        REQUIRE(a.host_view != nullptr);
+
+        std::uint8_t* base = static_cast<std::uint8_t*>(a.host_view);
+        for (int r = 0; r < kHeight; ++r) {
+            std::uint8_t val = static_cast<std::uint8_t>((s + r) % 256);
+            std::memset(base + r * rp, val, 1280);
+        }
+
+        a.desc->rank = 2;
+        a.desc->shape[0] = static_cast<std::uint32_t>(kHeight);
+        a.desc->shape[1] = static_cast<std::uint32_t>(kWidth);
+        a.desc->dtype = DType::U8;
+        a.desc->offset = 0;
+        a.desc->size = rp * kHeight;
+        a.desc->row_pitch = rp;
+        a.desc->sync_fence_kind = SyncFenceKind::None;
+
+        pub->publish(std::move(a));
+        sleep_ms(2);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    CHECK(WIFEXITED(status));
+    if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        std::printf("    consumer exit code = %d\n", WEXITSTATUS(status));
+    }
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+#endif  // AXON_WITH_CUDA
+
 AXON_TEST_MAIN("nvbuf_pool")
-#else
-int main() { return 0; }
-#endif

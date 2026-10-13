@@ -236,6 +236,7 @@ RT loop, Python, and GPU examples, each mapped to a tested demo.
 Optional feature flags (all default off — the core stays dependency-free):
 - `-DAXON_WITH_ICEORYX2=ON` — Iceoryx2 metadata backend ([docs/metadata-backends.md](docs/metadata-backends.md)).
 - `-DAXON_WITH_CUDA=ON` — `PoolBackend::Accelerator` CUDA VMM device pool for cross-process GPU zero-copy ([docs/usage.md §4](docs/usage.md#4-cross-process-gpu-zero-copy-accelerator-pool-r6)).
+- `-DAXON_ENABLE_JETSON=ON` — `PoolBackend::NvBufSurface` Jetson pool: camera → host view + CUDA view, no copy ([docs/usage.md §5](docs/usage.md#5-jetson-camera--cuda-zero-copy-nvbufsurface-pool)).
 
 ### Prerequisites
 
@@ -243,7 +244,7 @@ Optional feature flags (all default off — the core stays dependency-free):
 - A V4L2-compatible camera (a USB UVC camera works)
 - One accelerator board:
   - **AMD AI Series** (XDNA NPU) — XDNA driver, ROCm 6.x+
-  - **NVIDIA Jetson Orin** — JetPack 6.x, CUDA 12.x
+  - **NVIDIA Jetson** — JetPack 5.x+ (verified: AGX Xavier, JetPack 5.1.6 / CUDA 11.4)
 - gcc 11+, cmake 3.22+
 
 ### Spike PoC Build (week 1-2 validation)
@@ -264,7 +265,7 @@ What the PoC validates:
 - ✅ V4L2 capture → `VIDIOC_EXPBUF` exports a dma-buf FD
 - ✅ `SCM_RIGHTS` delivers the dma-buf FD across processes
 - ✅ The received FD is mmap'd as a zero-copy host view (eBPF-verified)
-- 🟡 Accelerator import (AMD XDNA / NVIDIA Jetson — decided in spike)
+- ✅ Accelerator import — NVIDIA Jetson via NvBufSurface ([examples/jetson_camera](examples/jetson_camera/README.md)); AMD XDNA not yet
 
 [Spike guide](examples/spike_poc/README.md) | [Spike decision tree](DesignFiles/diagrams.md#12-week-1-2-spike-poc-decision-tree)
 
@@ -392,12 +393,13 @@ Design → working library + measured results. Done (merged to `main`):
 - [x] **R6 accelerator pool** — `PoolBackend::Accelerator` CUDA VMM device zero-copy (`AXON_WITH_CUDA`)
 - [x] **R2 sync-fence** — `sync_file` fence surfaced in `latest_view` for producer→consumer ordering; non-RT `drain_fences()` keeps the RT read syscall-free (fence-gated frame skipped until its fence arrives)
 - [x] **Direction A — vision→LLM zero-copy** — framework tensor ↔ axon GPU buffer via `__cuda_array_interface__` on both the producer (`device_array`) and the consumer (`latest_view`), plus consumer-side CUDA VMM import. Working two-process demo (`examples/vla_demo/`: DeiT-tiny → axon → GPT-2 prefill, same GPU pointer both sides, no host copy)
+- [x] **Jetson NvBufSurface backend** — `PoolBackend::NvBufSurface` (`AXON_ENABLE_JETSON`): a UVC camera captures straight into the pool and another process gets the frame as a host view **and** a CUDA pointer, no copy. Verified on AGX Xavier with a real webcam (`examples/jetson_camera/`, host==device 4/4, staleness ~0.5 ms)
 - [x] **Direction D — NVENC data flywheel** — record the stream to disk straight from the shared GPU buffer: the recorder feeds each `latest_view()` to hardware NVENC with no host copy (`examples/nvenc_flywheel/`, decode-verified H.264)
 
 Next:
 
 - [ ] `cyclictest` 1 kHz jitter on a PREEMPT_RT kernel (needs the target board)
-- [ ] Accelerator formal backends (AMD XDNA / Jetson) + real sensor / real robot integration
+- [ ] AMD XDNA backend + real robot integration
 
 ---
 

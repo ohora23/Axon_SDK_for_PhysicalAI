@@ -219,6 +219,7 @@ instrumentation/gpu/build.sh && instrumentation/run_bounded.sh ./build/gpu_sidec
 선택 기능 플래그 (모두 기본 off — 코어는 의존성 0 유지):
 - `-DAXON_WITH_ICEORYX2=ON` — Iceoryx2 메타데이터 백엔드 ([docs/metadata-backends.md](docs/metadata-backends.md)).
 - `-DAXON_WITH_CUDA=ON` — 프로세스 간 GPU zero-copy용 `PoolBackend::Accelerator` CUDA VMM device pool ([docs/usage.md §4](docs/usage.md#4-cross-process-gpu-zero-copy-accelerator-pool-r6)).
+- `-DAXON_ENABLE_JETSON=ON` — `PoolBackend::NvBufSurface` Jetson pool: 카메라 → host view + CUDA view, 복사 없음 ([docs/usage.md §5](docs/usage.md#5-jetson-camera--cuda-zero-copy-nvbufsurface-pool)).
 
 ### 사전 요구사항
 
@@ -226,7 +227,7 @@ instrumentation/gpu/build.sh && instrumentation/run_bounded.sh ./build/gpu_sidec
 - V4L2 호환 카메라 (USB UVC 카메라면 됨)
 - 가속기 보드 1종:
   - **AMD AI Series** (XDNA NPU) — XDNA 드라이버, ROCm 6.x+
-  - **NVIDIA Jetson Orin** — JetPack 6.x, CUDA 12.x
+  - **NVIDIA Jetson** — JetPack 5.x+ (검증: AGX Xavier, JetPack 5.1.6 / CUDA 11.4)
 - gcc 11+, cmake 3.22+
 
 ### 스파이크 PoC 빌드 (week 1-2 검증)
@@ -247,7 +248,7 @@ PoC가 검증하는 것:
 - ✅ V4L2 캡처 → `VIDIOC_EXPBUF`가 dma-buf FD를 export
 - ✅ `SCM_RIGHTS`가 dma-buf FD를 프로세스 간 전달
 - ✅ 받은 FD를 zero-copy host view로 mmap (eBPF 검증)
-- 🟡 가속기 import (AMD XDNA / NVIDIA Jetson — 스파이크에서 결정)
+- ✅ 가속기 import — NVIDIA Jetson은 NvBufSurface로 완료 ([examples/jetson_camera](examples/jetson_camera/README.md)), AMD XDNA는 아직
 
 [스파이크 가이드](examples/spike_poc/README.md) | [스파이크 결정 트리](DesignFiles/diagrams.md#12-week-1-2-spike-poc-decision-tree)
 
@@ -373,12 +374,13 @@ A. Apache 2.0 (특허 그랜트 포함 — 로봇 산업 채택에 더 친화적
 - [x] **R6 accelerator pool** — `PoolBackend::Accelerator` CUDA VMM device zero-copy (`AXON_WITH_CUDA`)
 - [x] **R2 sync-fence** — 생산자→소비자 순서 보장을 위해 `sync_file` fence를 `latest_view`에 노출; 비-RT `drain_fences()`가 RT 읽기를 syscall-free로 유지(fence 도착 전 프레임은 스킵)
 - [x] **방향 A — vision→LLM zero-copy** — 프레임워크 텐서 ↔ axon GPU 버퍼를 `__cuda_array_interface__`로 생산자(`device_array`)·소비자(`latest_view`) 양쪽에서 연결 + 소비자 측 CUDA VMM import. 동작하는 2-프로세스 데모(`examples/vla_demo/`: DeiT-tiny → axon → GPT-2 prefill, 양쪽 동일 GPU 포인터, 호스트 복사 없음)
+- [x] **Jetson NvBufSurface 백엔드** — `PoolBackend::NvBufSurface` (`AXON_ENABLE_JETSON`): UVC 카메라가 pool에 직접 캡처하고, 다른 프로세스가 같은 프레임을 host view **와** CUDA 포인터로 복사 없이 받음. 실제 웹캠과 AGX Xavier에서 검증(`examples/jetson_camera/`, host==device 4/4, staleness ~0.5 ms)
 - [x] **방향 D — NVENC 데이터 플라이휠** — 공유 GPU 버퍼에서 곧장 디스크로 녹화: 녹화기가 각 `latest_view()`를 호스트 복사 없이 하드웨어 NVENC에 전달(`examples/nvenc_flywheel/`, 디코드로 검증된 H.264)
 
 다음:
 
 - [ ] PREEMPT_RT 커널에서 `cyclictest` 1 kHz 지터 (타깃 보드 필요)
-- [ ] 가속기 정식 백엔드 (AMD XDNA / Jetson) + 실 센서 / 실 로봇 통합
+- [ ] AMD XDNA 백엔드 + 실 로봇 통합
 
 ---
 

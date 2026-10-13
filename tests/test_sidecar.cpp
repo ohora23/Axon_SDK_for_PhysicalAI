@@ -6,6 +6,7 @@
 // not a copy).
 
 #include "axon/detail/sidecar.h"
+#include "axon/tensor_descriptor.h"
 #include "axon_test.h"
 
 #include <cerrno>
@@ -142,6 +143,56 @@ AXON_TEST(socket_path_sanitized) {
     std::string tail = p.substr(prefix.size());  // service-derived portion
     CHECK(tail.find('/') == std::string::npos);   // slashes sanitized away
     CHECK(tail.find(':') == std::string::npos);   // colons too
+}
+
+AXON_TEST(ext_blob_roundtrip) {
+    constexpr std::size_t kExtLen = 1040;
+    std::vector<std::uint8_t> ext(kExtLen);
+    for (std::size_t i = 0; i < kExtLen; ++i) ext[i] = static_cast<std::uint8_t>(i & 0xff);
+
+    auto* server = SidecarServer::create("sidecar/test_ext");
+    REQUIRE(server != nullptr);
+    server->set_pool({}, 1, 0, axon::kWireVersion, 0, ext.data(), ext.size());
+
+    auto* client = SidecarClient::create("sidecar/test_ext");
+    REQUIRE(client != nullptr);
+    CHECK(client->connect(2000) == 0);
+
+    // Accept the client and send handshake.
+    int accepted = server->accept_and_handshake(1000);
+    CHECK(accepted >= 1);
+
+    // Client receives the handshake with ext blob.
+    PoolHandshakeHeader hdr {};
+    std::vector<int> fds;
+    std::vector<std::uint8_t> ext_out;
+    CHECK(client->recv_pool_handshake(&hdr, &fds, 2000, &ext_out) == 0);
+    CHECK(hdr.ext_len == 1040);
+    CHECK(ext_out.size() == kExtLen);
+    for (std::size_t i = 0; i < kExtLen; ++i) {
+        CHECK(ext_out[i] == static_cast<std::uint8_t>(i & 0xff));
+    }
+
+    // broadcast_pool (re-announce with ext_len=0) + broadcast_sync_fence;
+    // poll_sync_fences should still deliver token 7 (proves re-announce ext skip).
+    int pipefd[2];
+    REQUIRE(pipe(pipefd) == 0);
+    server->broadcast_pool();
+    server->broadcast_sync_fence(7, pipefd[1]);
+    close(pipefd[1]);
+
+    bool got_token7 = false;
+    auto sink = [](std::uint64_t token, int fd, void* ctx) {
+        if (token == 7) *static_cast<bool*>(ctx) = true;
+        if (fd >= 0) close(fd);
+    };
+    int polled = client->poll_sync_fences(500, sink, &got_token7);
+    CHECK(polled >= 1);
+    CHECK(got_token7);
+
+    close(pipefd[0]);
+    delete client;
+    delete server;
 }
 
 AXON_TEST_MAIN("sidecar")

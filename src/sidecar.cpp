@@ -33,6 +33,34 @@ std::string sanitize(const std::string& service_name) {
     return out;
 }
 
+// Read exactly `n` bytes from `fd` into `buf`. EINTR-safe.
+// Returns 0 on success, -1 with errno=ETIMEDOUT (poll timeout) or errno=EPROTO (EOF before n bytes).
+int read_exact(int fd, void* buf, size_t n, int timeout_ms) {
+    if (n == 0) return 0;
+    char* p = static_cast<char*>(buf);
+    size_t remaining = n;
+    while (remaining > 0) {
+        struct pollfd pfd {fd, POLLIN, 0};
+        int pr = ::poll(&pfd, 1, timeout_ms);
+        if (pr < 0 && errno == EINTR) continue;
+        if (pr <= 0) {
+            if (pr == 0) errno = ETIMEDOUT;
+            return -1;
+        }
+        ssize_t r = ::recv(fd, p, remaining, 0);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (r == 0) { errno = EPROTO; return -1; }
+        p += r;
+        remaining -= static_cast<size_t>(r);
+        // Reduce timeout for subsequent reads (already consumed some).
+        timeout_ms = 1000;
+    }
+    return 0;
+}
+
 }  // namespace
 
 std::string sidecar_socket_path(const std::string& service_name) {
@@ -147,11 +175,28 @@ struct SidecarServer::Impl {
     // Cached pool bundle.
     std::vector<int> pool_fds;
     PoolHandshakeHeader header {};
+    std::vector<std::uint8_t> ext;  // backend import blob
 
     int send_pool_to(int client_fd) {
-        return send_fds(client_fd, pool_fds.data(),
-                        static_cast<int>(pool_fds.size()),
-                        &header, sizeof(header));
+        int r = send_fds(client_fd, pool_fds.data(),
+                         static_cast<int>(pool_fds.size()),
+                         &header, sizeof(header));
+        if (r < 0) return -1;
+        if (!ext.empty()) {
+            const char* p = reinterpret_cast<const char*>(ext.data());
+            size_t remaining = ext.size();
+            for (;;) {
+                ssize_t w = ::send(client_fd, p, remaining, MSG_NOSIGNAL);
+                if (w < 0) {
+                    if (errno == EINTR) continue;
+                    return -1;
+                }
+                if (static_cast<size_t>(w) == remaining) break;
+                p += w;
+                remaining -= static_cast<size_t>(w);
+            }
+        }
+        return 0;
     }
 };
 
@@ -186,18 +231,27 @@ SidecarServer* SidecarServer::create(const std::string& service_name) {
 }
 
 void SidecarServer::set_pool(const std::vector<int>& fds,
-                             std::uint32_t pool_generation,
-                             std::uint64_t buffer_size,
-                             std::uint32_t wire_version,
-                             std::uint8_t backend) {
+                              std::uint32_t pool_generation,
+                              std::uint64_t buffer_size,
+                              std::uint32_t wire_version,
+                              std::uint8_t backend,
+                              const void* ext, std::size_t ext_len) {
     impl_->pool_fds = fds;
     impl_->header = PoolHandshakeHeader{};
     impl_->header.msg = static_cast<std::uint8_t>(SidecarMsg::PoolHandshake);
     impl_->header.backend = backend;
+    impl_->header.ext_len = static_cast<std::uint16_t>(ext_len);
     impl_->header.wire_version = wire_version;
     impl_->header.pool_generation = pool_generation;
     impl_->header.n_buffers = static_cast<std::uint32_t>(fds.size());
     impl_->header.buffer_size = buffer_size;
+    if (ext_len > 0 && ext_len <= 65535 && ext) {
+        impl_->ext.assign(static_cast<const std::uint8_t*>(ext),
+                          static_cast<const std::uint8_t*>(ext) + ext_len);
+    } else {
+        impl_->ext.clear();
+        impl_->header.ext_len = 0;
+    }
 }
 
 int SidecarServer::accept_and_handshake(int timeout_ms) {
@@ -294,7 +348,8 @@ int SidecarClient::connect(int timeout_ms) {
 
 int SidecarClient::recv_pool_handshake(PoolHandshakeHeader* header_out,
                                        std::vector<int>* fds_out,
-                                       int timeout_ms) {
+                                       int timeout_ms,
+                                       std::vector<std::uint8_t>* ext_out) {
     struct pollfd pfd {impl_->sock, POLLIN, 0};
     int pr = ::poll(&pfd, 1, timeout_ms);
     if (pr <= 0) {
@@ -314,6 +369,19 @@ int SidecarClient::recv_pool_handshake(PoolHandshakeHeader* header_out,
         return -1;
     }
     fds_out->assign(fds, fds + n);
+
+    // Read (and discard if ext_out is null) the extension blob to keep the stream framed.
+    if (header_out->ext_len > 0) {
+        std::vector<std::uint8_t> tmp(header_out->ext_len);
+        if (read_exact(impl_->sock, tmp.data(), tmp.size(), timeout_ms) < 0) {
+            for (int i = 0; i < n; ++i) ::close(fds[i]);
+            fds_out->clear();
+            return -1;
+        }
+        if (ext_out) *ext_out = std::move(tmp);
+    } else {
+        if (ext_out) ext_out->clear();
+    }
     return 0;
 }
 
@@ -326,16 +394,46 @@ int SidecarClient::poll_sync_fences(int timeout_ms,
         int pr = ::poll(&pfd, 1, count == 0 ? timeout_ms : 0);
         if (pr <= 0) break;
 
-        SyncFenceHeader h {};
-        int fds[kMaxSidecarFds];
-        int n = 0;
-        if (recv_fds(impl_->sock, fds, kMaxSidecarFds, &n, &h, sizeof(h)) < 0) {
+        // Peek the message tag first (1 byte).
+        std::uint8_t tag;
+        ssize_t peeked = ::recv(impl_->sock, &tag, 1, MSG_PEEK);
+        if (peeked <= 0) {
+            if (peeked < 0 && errno == EINTR) continue;
             break;
         }
-        if (h.msg == static_cast<std::uint8_t>(SidecarMsg::SyncFence) && n == 1) {
-            if (sink) sink(h.sync_fence_token, fds[0], ctx);
+
+        int fds[kMaxSidecarFds];
+        int n = 0;
+        // SyncFenceHeader is 16 bytes; PoolHandshakeHeader is 24 bytes.
+        std::size_t hdr_size = (tag == static_cast<std::uint8_t>(SidecarMsg::SyncFence))
+                               ? sizeof(SyncFenceHeader) : sizeof(PoolHandshakeHeader);
+
+        alignas(std::max_align_t) char raw_hdr[24];
+        if (recv_fds(impl_->sock, fds, kMaxSidecarFds, &n, raw_hdr, hdr_size) < 0) {
+            break;
+        }
+
+        if (tag == static_cast<std::uint8_t>(SidecarMsg::SyncFence) && n == 1) {
+            const auto& sh = *reinterpret_cast<SyncFenceHeader*>(raw_hdr);
+            if (sink) sink(sh.sync_fence_token, fds[0], ctx);
             else ::close(fds[0]);
             ++count;
+        } else if (tag == static_cast<std::uint8_t>(SidecarMsg::PoolHandshake)) {
+            const auto& ph = *reinterpret_cast<PoolHandshakeHeader*>(raw_hdr);
+            // Mid-stream re-announce: read and discard ext_len bytes (100 ms)
+            // so the next message stays framed, then close the FDs.
+            // The publisher sends header + blob back to back, so this does not
+            // wait in practice. If it fails the stream is desynced: shut the
+            // socket down rather than misparse every later fence.
+            bool framed = true;
+            char sink_buf[512];
+            for (std::size_t left = ph.ext_len; left > 0 && framed;) {
+                std::size_t chunk = left < sizeof sink_buf ? left : sizeof sink_buf;
+                framed = read_exact(impl_->sock, sink_buf, chunk, 100) == 0;
+                left -= chunk;
+            }
+            for (int i = 0; i < n; ++i) ::close(fds[i]);
+            if (!framed) { ::shutdown(impl_->sock, SHUT_RDWR); break; }
         } else {
             for (int i = 0; i < n; ++i) ::close(fds[i]);
         }

@@ -228,6 +228,43 @@ cmake --build build -j
 
 ---
 
+## 5. Jetson: camera → CUDA zero-copy (NvBufSurface pool)
+
+With `-DAXON_ENABLE_JETSON=ON` (JetPack ≥ 5, headers from `/usr/src/jetson_multimedia_api`)
+a pool holds **NvBufSurface** buffers. Unlike the CUDA VMM pool (§4) these are real
+dma-bufs, so one buffer is at the same time:
+
+- a **V4L2 capture target** — a UVC camera writes into it directly (`V4L2_MEMORY_DMABUF`),
+- a **host view** — consumers mmap it through the normal subscriber path (`TensorView::data`),
+- a **CUDA view** — with `-DAXON_WITH_CUDA=ON` the consumer also gets `TensorView::device_ptr`
+  (imported via `NvBufSurfaceImport` → EGLImage → CUDA during `wait_handshake()`, so
+  `latest_view()` stays syscall-free).
+
+```cpp
+TensorPoolConfig cfg{6, 0, PoolBackend::NvBufSurface, nullptr};  // buffer_size 0: surface decides
+cfg.width  = 640;
+cfg.height = 480;
+cfg.fourcc = V4L2_PIX_FMT_YUYV;            // YUYV, GREY or RGBA32 (single-plane)
+auto pool = TensorPool::create(cfg);
+
+pool->row_pitch();      // surface pitch — set it as the descriptor's row_pitch
+pool->dma_buf_fds();    // hand these to VIDIOC_QBUF (memory = V4L2_MEMORY_DMABUF)
+pool->device_ptr(i);    // producer-side CUDA pointer (mapped on first call)
+```
+
+The camera decides which buffer it filled, so publish that one:
+`a.buffer_index = v4l2_buf.index;` after `acquire_descriptor()`, and keep the last
+published buffer out of the camera queue until the next frame is published (the
+consumer may still be reading it). Ship YUYV as rank 2 `[H, W·2]` U8 — axon treats the
+last dimension as one pitched row. The full, verified loop is
+[`examples/jetson_camera/`](../examples/jetson_camera/README.md); the probe that
+established each step is in [hardware-verification §6](hardware-verification.md#6-jetson--camera--cuda-zero-copy-via-nvbufsurface-agx-xavier-).
+
+The pool handshake carries a per-buffer import blob for this backend, which is why the
+wire version is **4**.
+
+---
+
 ## Building against axon
 
 In-tree (what the examples do): link the `axon` target.
@@ -245,6 +282,7 @@ Backend/feature flags (all default **off**, so the core stays dependency-free):
 | `-DAXON_BUILD_PYTHON=ON`   | pybind11 module `axon` (zero-copy NumPy) |
 | `-DAXON_WITH_ICEORYX2=ON`  | Iceoryx2 lock-free SHM metadata backend ([docs/metadata-backends.md](metadata-backends.md)) |
 | `-DAXON_WITH_CUDA=ON`      | `PoolBackend::Accelerator` CUDA VMM device pool (§4) |
+| `-DAXON_ENABLE_JETSON=ON`  | `PoolBackend::NvBufSurface` Jetson pool; with CUDA also the device view (§5) |
 
 Run the tested examples directly:
 

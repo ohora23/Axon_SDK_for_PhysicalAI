@@ -83,7 +83,8 @@ static_assert(sizeof(TensorDescriptor) == 144,
 
 // Wire version — bump on any wire-format change. Mismatched versions refuse to
 // communicate. v2 added the imaging/depth metadata block above; v3 added the
-// pool backend byte to the sidecar PoolHandshakeHeader (host vs device import).
-constexpr std::uint32_t kWireVersion = 3;
+// pool backend byte to the sidecar PoolHandshakeHeader (host vs device import);
+// v4: pool handshake may carry an ext blob (NvBufSurface import params).
+constexpr std::uint32_t kWireVersion = 4;
 
 }  // namespace axon

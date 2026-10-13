@@ -98,7 +98,9 @@ int TensorPublisher::handshake_pool() {
     impl_->server->set_pool(impl_->pool->dma_buf_fds(),
                             static_cast<std::uint32_t>(impl_->pool->generation()),
                             impl_->buffer_size, kWireVersion,
-                            static_cast<std::uint8_t>(impl_->pool->backend()));
+                            static_cast<std::uint8_t>(impl_->pool->backend()),
+                            impl_->pool->import_params().data(),
+                            impl_->pool->import_params().size());
     return impl_->server->accept_and_handshake(kHandshakeWaitMs);
 }
 
@@ -156,7 +158,9 @@ void TensorPublisher::publish(AcquiredDescriptor&& d, int sync_fd) {
     impl_->server->set_pool(impl_->pool->dma_buf_fds(),
                             static_cast<std::uint32_t>(impl_->pool->generation()),
                             impl_->buffer_size, kWireVersion,
-                            static_cast<std::uint8_t>(impl_->pool->backend()));
+                            static_cast<std::uint8_t>(impl_->pool->backend()),
+                            impl_->pool->import_params().data(),
+                            impl_->pool->import_params().size());
     impl_->server->accept_and_handshake(0);
 }
 
@@ -165,7 +169,9 @@ int TensorPublisher::reannounce_pool() {
     impl_->server->set_pool(impl_->pool->dma_buf_fds(),
                             static_cast<std::uint32_t>(impl_->pool->generation()),
                             impl_->buffer_size, kWireVersion,
-                            static_cast<std::uint8_t>(impl_->pool->backend()));
+                            static_cast<std::uint8_t>(impl_->pool->backend()),
+                            impl_->pool->import_params().data(),
+                            impl_->pool->import_params().size());
     int n = impl_->server->broadcast_pool();
     n += impl_->server->accept_and_handshake(0);
     return n;

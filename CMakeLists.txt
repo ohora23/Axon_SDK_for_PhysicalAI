@@ -78,6 +78,17 @@ if(AXON_WITH_CUDA)
     target_link_libraries(axon PUBLIC CUDA::cuda_driver)
 endif()
 
+# Jetson NvBufSurface pool (JetPack >= 5). Headers from jetson_multimedia_api,
+# library from the Tegra lib dir (on the default loader path on L4T).
+if(AXON_ENABLE_JETSON)
+    set(AXON_JETSON_MMAPI "/usr/src/jetson_multimedia_api" CACHE PATH "Jetson Multimedia API root")
+    find_library(NVBUFSURFACE_LIB nvbufsurface HINTS /usr/lib/aarch64-linux-gnu/tegra REQUIRED)
+    target_sources(axon PRIVATE src/pool_nvbufsurface.cpp)
+    target_include_directories(axon PRIVATE ${AXON_JETSON_MMAPI}/include)
+    target_compile_definitions(axon PUBLIC AXON_ENABLE_JETSON=1)
+    target_link_libraries(axon PUBLIC ${NVBUFSURFACE_LIB})
+endif()
+
 # Enable testing before descending into subdirectories so that add_test() calls
 # in examples/ (e.g. the demo smoke test) and tests/ all register.
 if(AXON_BUILD_TESTS)

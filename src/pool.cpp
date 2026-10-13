@@ -11,6 +11,7 @@
 //             a camera.
 //   V4L2    — VIDIOC_REQBUFS + VIDIOC_EXPBUF, ported from the week 1-2 spike.
 //             Requires a capture device.
+//   NvBufSurface — Jetson NvBufSurface SURFACE_ARRAY dma-bufs (AXON_ENABLE_JETSON).
 
 #include "axon/pool.h"
 
@@ -27,6 +28,10 @@
 
 #if AXON_WITH_CUDA
 #include "axon/detail/accelerator.h"
+#endif
+
+#if AXON_ENABLE_JETSON
+#include "axon/detail/nvbuf.h"
 #endif
 
 namespace axon {
@@ -49,6 +54,9 @@ struct Buffer {
     void* device_ptr = nullptr;     // CUdeviceptr in the owning process
     unsigned long long accel_h = 0; // CUmemGenericAllocationHandle (for free)
     std::size_t accel_size = 0;     // granularity-aligned size
+    // NvBufSurface backend only:
+    void* nvbuf_surf = nullptr;     // NvBufSurface*
+    std::uint32_t pitch = 0;        // row pitch of plane 0
 };
 
 int make_sealed_memfd(std::size_t size) {
@@ -86,6 +94,7 @@ struct TensorPool::Impl {
     bool allocate_udmabuf();
     bool allocate_v4l2();
     bool allocate_accelerator();
+    bool allocate_nvbufsurface();
     void rebuild_share_fds();
 };
 
@@ -174,13 +183,35 @@ bool TensorPool::Impl::allocate_accelerator() {
 #endif
 }
 
+bool TensorPool::Impl::allocate_nvbufsurface() {
+#if AXON_ENABLE_JETSON
+    std::size_t max_size = 0;
+    for (std::size_t i = 0; i < cfg.n_buffers; ++i) {
+        detail::NvBuf nb;
+        if (!detail::nvbuf_alloc(cfg.width, cfg.height, cfg.fourcc, &nb)) return false;
+        Buffer b;
+        b.share_fd = nb.fd;
+        b.nvbuf_surf = nb.surf;
+        b.pitch = nb.pitch;
+        if (nb.size > max_size) max_size = nb.size;
+        buffers.push_back(b);
+    }
+    buffer_size = page_round_up(max_size);
+    return true;
+#else
+    errno = ENOSYS;   // built without Jetson support
+    return false;
+#endif
+}
+
 bool TensorPool::Impl::allocate() {
     bool ok = false;
     switch (cfg.backend) {
-        case PoolBackend::Custom:      ok = allocate_custom();      break;
-        case PoolBackend::UDMABUF:     ok = allocate_udmabuf();     break;
-        case PoolBackend::V4L2:        ok = allocate_v4l2();        break;
-        case PoolBackend::Accelerator: ok = allocate_accelerator(); break;
+        case PoolBackend::Custom:        ok = allocate_custom();        break;
+        case PoolBackend::UDMABUF:       ok = allocate_udmabuf();       break;
+        case PoolBackend::V4L2:          ok = allocate_v4l2();          break;
+        case PoolBackend::Accelerator:   ok = allocate_accelerator();   break;
+        case PoolBackend::NvBufSurface:  ok = allocate_nvbufsurface();  break;
     }
     if (!ok) { free_all(); return false; }
 
@@ -199,6 +230,13 @@ void TensorPool::Impl::free_all() {
             continue;
         }
 #endif
+#if AXON_ENABLE_JETSON
+        if (b.nvbuf_surf) {   // NvBufSurface: destroy surface (closes FD internally)
+            detail::NvBuf nb{b.nvbuf_surf, b.share_fd, 0, 0};
+            detail::nvbuf_free(&nb);
+            continue;
+        }
+#endif
         if (b.share_fd >= 0) ::close(b.share_fd);
         if (b.backing_fd >= 0) ::close(b.backing_fd);
     }
@@ -212,7 +250,8 @@ TensorPool::TensorPool() : impl_(std::make_unique<Impl>()) {}
 TensorPool::~TensorPool() { impl_->free_all(); }
 
 std::unique_ptr<TensorPool> TensorPool::create(const TensorPoolConfig& cfg) {
-    if (cfg.n_buffers == 0 || cfg.buffer_size == 0) return nullptr;
+    if (cfg.n_buffers == 0) return nullptr;
+    if (cfg.buffer_size == 0 && cfg.backend != PoolBackend::NvBufSurface) return nullptr;
 
     auto pool = std::unique_ptr<TensorPool>(new TensorPool());
     pool->impl_->cfg = cfg;
@@ -239,6 +278,10 @@ PoolBackend TensorPool::backend() const noexcept {
 
 void* TensorPool::device_ptr(std::size_t index) const noexcept {
     return index < impl_->buffers.size() ? impl_->buffers[index].device_ptr : nullptr;
+}
+
+std::uint32_t TensorPool::row_pitch() const noexcept {
+    return impl_->buffers.empty() ? 0 : impl_->buffers[0].pitch;
 }
 
 int TensorPool::acquire_next() {

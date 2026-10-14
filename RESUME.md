@@ -1,7 +1,7 @@
 # 다음 세션에서 이어서 작업하기
 
 > 본 문서는 Axon 작업을 다른 시점/세션에서 이어가기 위한 **현황 + 체크리스트 + 명령어 모음**입니다.
-> 마지막 갱신: 2026-10-14 (main = `5500a0e`, PR #38까지 머지 — Jetson 백엔드 완료)
+> 마지막 갱신: 2026-10-15 (main = `035d8c6`, PR #39까지 머지 — Jetson 백엔드 완료, hermes-head를 Axon 전용 보드로 전환)
 
 ---
 
@@ -46,10 +46,7 @@
 - [ ] **실제 로봇 통합** — 실 센서(UVC 웹캠)는 Jetson에서 검증 완료
 - [ ] (기존 버그) `SidecarClient::connect`가 재핸드셰이크 때 이전 소켓을 닫지 않음
 
-Jetson 보드 = hermes-head (AGX Xavier, JetPack 5.1.6). 접속은 `~/z_Setup_NvidiaXavier/hermes_ssh.sh head '<cmd>'`, 작업 트리 `~/axon-dev/{src,build}`, cmake는 `~/axon-dev/cmake/bin` (시스템 cmake 3.16은 너무 낮음). 웹캠 `/dev/video0`.
-
-정리 거리:
-- [ ] 머지 완료된 원격 브랜치 삭제: `git push origin --delete feat/week-3-4-formal-impl`
+Jetson 보드 = hermes-head (AGX Xavier, JetPack 5.1.6). 2026-10-15부터 **Axon 전용**이다: Hermes LLM 서비스는 껐고(파일·모델은 보존), 백업과 복구법은 호스트 PC의 `~/z_Setup_NvidiaXavier/backup_head_2026-10-14/README.md`에 있다. sudo는 비밀번호가 필요하므로 사용자가 직접 실행한다. 접속은 `~/z_Setup_NvidiaXavier/hermes_ssh.sh head '<cmd>'`, 작업 트리 `~/axon-dev/{src,build}`, cmake는 `~/axon-dev/cmake/bin` (시스템 cmake 3.16은 너무 낮음). 웹캠 `/dev/video0`.
 
 ---
 

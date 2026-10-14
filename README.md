@@ -61,6 +61,7 @@ Green = payload, referenced in place and never copied. Blue = the only thing tha
 | RT loop page faults | **0 / frame** |
 | GPU cross-process share | **zero-copy**, 200/200 frames, 1.68 GB |
 | VLM encoder→LLM handoff (video 34 MB) | **36× faster** than a host round-trip |
+| Real camera → CUDA on a Jetson (AGX Xavier) | **0 copies**: the camera writes the buffer another process's CUDA reads |
 
 Full detail in [Measured Results](#measured-results); the staleness guarantee is in [Target Metrics](#target-metrics--and-what-we-measured).
 
@@ -154,6 +155,7 @@ Fast-RTPS on the same workload. Full detail: [docs/hardware-verification.md](doc
 | Memory copies (same bytes) | 0 payload copies | **cache-misses 8.6× lower; ~0 transport syscalls/frame** ✅ |
 | Page faults during RT | **0** | **0 / frame** (flat at 20× the frames) ✅ |
 | GPU zero-copy import | real hardware | **RTX 5080: 200/200 frames, 0 copies, 1.68 GB** ✅ |
+| Sensor → accelerator, no copy | real board + real sensor | **AGX Xavier + UVC webcam: host == CUDA view on 30/30 frames, staleness ~0.5 ms** ✅ |
 | Staleness bound | sum of 7 explicit terms | deterministic formula (§5) ✅ |
 | 1kHz RT worst-case jitter | < 100µs | pending PREEMPT_RT kernel 🟡 |
 
@@ -196,6 +198,21 @@ memory handle across processes: 200/200 frames validated on-GPU, **0 host payloa
 1.68 GB moved zero-copy. Plus RT page-faults measured at **0 per frame**. See
 [docs/hardware-verification.md](docs/hardware-verification.md) and the architecture decisions
 in [docs/adr/](docs/adr/).
+
+**On a real Jetson with a real camera.** On an AGX Xavier (JetPack 5.1.6) with a UVC webcam,
+the camera captures straight into an axon `NvBufSurface` pool, and a second process receives
+the same frame as a host view **and** a CUDA device pointer — no copy anywhere on the path.
+
+| Check (AGX Xavier, 640×480 YUYV) | Result |
+|---|---|
+| Camera writes into the pool (`V4L2_MEMORY_DMABUF`) | ✅ 3/3 probe runs |
+| Other process: CUDA view == host view | ✅ **30/30** frames (probe), **4/4** checks (demo) |
+| GPU write by the consumer seen by the producer | ✅ same physical memory |
+| Staleness, camera frame → consumer | **~0.5 ms** (incl. a 1 ms poll sleep) |
+| Library tests on the board | **9/9** ctest, `test_nvbuf_pool` 10/10 reruns |
+
+Reproduce with [`examples/jetson_camera/`](examples/jetson_camera/README.md); every step is in
+[docs/hardware-verification.md §6](docs/hardware-verification.md#6-jetson--camera--cuda-zero-copy-via-nvbufsurface-agx-xavier-).
 
 > Numbers are machine-specific — reproduce with `benchmarks/mock/mock_compare.py` and the
 > `instrumentation/` suite (all resource-bounded so they won't freeze the box).

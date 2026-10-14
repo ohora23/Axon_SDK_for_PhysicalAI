@@ -61,6 +61,7 @@ flowchart LR
 | RT 루프 page fault | **0 / frame** |
 | GPU 프로세스 간 공유 | **zero-copy**, 200/200 프레임, 1.68 GB |
 | VLM 인코더→LLM 핸드오프 (video 34 MB) | host 왕복 대비 **36× 빠름** |
+| Jetson(AGX Xavier)에서 실제 카메라 → CUDA | **복사 0**: 카메라가 쓴 버퍼를 다른 프로세스의 CUDA가 그대로 읽음 |
 
 자세한 내용은 [측정 결과](#측정-결과), 신선도 보장은 [목표 지표와 실측](#목표-지표와-실측)에 있다.
 
@@ -148,6 +149,7 @@ flowchart LR
 | 메모리 복사 (동일 바이트) | 페이로드 복사 0 | **캐시미스 8.6× 적음; 프레임당 전송 syscall ~0** ✅ |
 | RT 중 page fault | **0** | **0 / frame** (프레임 20배에도 평평) ✅ |
 | GPU zero-copy import | 실제 하드웨어 | **RTX 5080: 200/200 프레임, 복사 0, 1.68 GB** ✅ |
+| 센서 → 가속기, 복사 없음 | 실제 보드 + 실제 센서 | **AGX Xavier + UVC 웹캠: host == CUDA view 30/30 프레임, staleness ~0.5 ms** ✅ |
 | Staleness 한계 | 명시적 7개 항의 합 | 결정적 산식 (§5) ✅ |
 | 1kHz RT 최악 지터 | < 100µs | PREEMPT_RT 커널 대기 🟡 |
 
@@ -182,6 +184,18 @@ worst_case_staleness ≤
 ROS2는 같은 데이터를 옮기는 데 **캐시미스 8.6배**, **명령어 5배** 를 쓴다.
 
 **로봇 보드 없이도 실제 GPU zero-copy.** axon의 FD 사이드카가 살아 있는 RTX 5080 GPU 메모리 핸들을 프로세스 간에 나른다: 200/200 프레임 on-GPU 검증, **host 페이로드 복사 0**, 1.68 GB zero-copy 이동. 여기에 RT page fault **프레임당 0** 측정. [docs/hardware-verification.md](docs/hardware-verification.md) 및 [docs/adr/](docs/adr/)의 아키텍처 결정 참조.
+
+**실제 Jetson과 실제 카메라에서.** AGX Xavier(JetPack 5.1.6)와 UVC 웹캠으로, 카메라가 axon `NvBufSurface` pool에 직접 캡처하고 두 번째 프로세스가 같은 프레임을 host view **와** CUDA device 포인터로 받는다 — 경로 어디에도 복사가 없다.
+
+| 검증 항목 (AGX Xavier, 640×480 YUYV) | 결과 |
+|---|---|
+| 카메라가 pool에 직접 기록 (`V4L2_MEMORY_DMABUF`) | ✅ 프로브 3/3회 |
+| 다른 프로세스: CUDA view == host view | ✅ **30/30** 프레임(프로브), **4/4** 검사(데모) |
+| 소비자의 GPU 쓰기가 생산자에게 보임 | ✅ 같은 물리 메모리 |
+| staleness, 카메라 프레임 → 소비자 | **~0.5 ms** (1 ms 폴링 대기 포함) |
+| 보드에서 라이브러리 테스트 | ctest **9/9**, `test_nvbuf_pool` 10/10회 반복 |
+
+재현: [`examples/jetson_camera/`](examples/jetson_camera/README.md), 단계별 근거: [docs/hardware-verification.md §6](docs/hardware-verification.md#6-jetson--camera--cuda-zero-copy-via-nvbufsurface-agx-xavier-).
 
 > 수치는 머신 종속적 — `benchmarks/mock/mock_compare.py`와 `instrumentation/` 스위트로 재현 가능(모두 리소스 제한되어 PC를 얼리지 않음).
 

@@ -11,6 +11,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <dirent.h>
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -191,6 +192,28 @@ AXON_TEST(ext_blob_roundtrip) {
     CHECK(got_token7);
 
     close(pipefd[0]);
+    delete client;
+    delete server;
+}
+
+static int open_fd_count() {
+    int n = 0;
+    if (DIR* d = opendir("/proc/self/fd")) {
+        while (readdir(d)) ++n;
+        closedir(d);
+    }
+    return n;
+}
+
+AXON_TEST(reconnect_does_not_leak_socket) {
+    auto* server = SidecarServer::create("sidecar/test_reconnect");
+    REQUIRE(server != nullptr);
+    auto* client = SidecarClient::create("sidecar/test_reconnect");
+    REQUIRE(client != nullptr);
+    CHECK(client->connect(2000) == 0);
+    const int before = open_fd_count();
+    for (int i = 0; i < 5; ++i) CHECK(client->connect(2000) == 0);
+    CHECK(open_fd_count() == before);   // each reconnect closes the previous socket
     delete client;
     delete server;
 }

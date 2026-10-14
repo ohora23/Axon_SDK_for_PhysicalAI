@@ -335,6 +335,7 @@ int SidecarClient::connect(int timeout_ms) {
     const int step = 20;
     for (;;) {
         if (::connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) {
+            if (impl_->sock >= 0) ::close(impl_->sock);  // re-handshake: drop the old link
             impl_->sock = sock;
             return 0;
         }

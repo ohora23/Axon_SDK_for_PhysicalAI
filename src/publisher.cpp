@@ -40,6 +40,23 @@ struct TensorPublisher::Impl {
     std::size_t next_index = 0;
     SeqNo seqno = 0;
 
+    bool pool_cached = false;
+    PoolGeneration cached_gen = 0;
+
+    // Hand the server the pool bundle (FDs + backend import blob). It copies
+    // both, so skip it unless forced or the pool generation changed.
+    void cache_pool(bool force) {
+        if (!force && pool_cached && cached_gen == pool->generation()) return;
+        server->set_pool(pool->dma_buf_fds(),
+                         static_cast<std::uint32_t>(pool->generation()),
+                         buffer_size, kWireVersion,
+                         static_cast<std::uint8_t>(pool->backend()),
+                         pool->import_params().data(),
+                         pool->import_params().size());
+        pool_cached = true;
+        cached_gen = pool->generation();
+    }
+
     void unmap_views() {
         for (void* v : host_views) {
             if (v && v != MAP_FAILED) ::munmap(v, buffer_size);
@@ -95,12 +112,7 @@ std::unique_ptr<TensorPublisher> TensorPublisher::create(
 }
 
 int TensorPublisher::handshake_pool() {
-    impl_->server->set_pool(impl_->pool->dma_buf_fds(),
-                            static_cast<std::uint32_t>(impl_->pool->generation()),
-                            impl_->buffer_size, kWireVersion,
-                            static_cast<std::uint8_t>(impl_->pool->backend()),
-                            impl_->pool->import_params().data(),
-                            impl_->pool->import_params().size());
+    impl_->cache_pool(false);
     return impl_->server->accept_and_handshake(kHandshakeWaitMs);
 }
 
@@ -154,24 +166,15 @@ void TensorPublisher::publish(AcquiredDescriptor&& d, int sync_fd) {
     impl_->meta->publish(*desc);
 
     // Pick up any consumer that connected after the initial handshake (non-RT,
-    // non-blocking); they receive the current pool bundle.
-    impl_->server->set_pool(impl_->pool->dma_buf_fds(),
-                            static_cast<std::uint32_t>(impl_->pool->generation()),
-                            impl_->buffer_size, kWireVersion,
-                            static_cast<std::uint8_t>(impl_->pool->backend()),
-                            impl_->pool->import_params().data(),
-                            impl_->pool->import_params().size());
+    // non-blocking); they receive the current pool bundle. Re-cached only when
+    // the pool generation moved, so the steady state copies nothing.
+    impl_->cache_pool(false);
     impl_->server->accept_and_handshake(0);
 }
 
 int TensorPublisher::reannounce_pool() {
     impl_->map_views();  // FDs changed after a retire/reallocate
-    impl_->server->set_pool(impl_->pool->dma_buf_fds(),
-                            static_cast<std::uint32_t>(impl_->pool->generation()),
-                            impl_->buffer_size, kWireVersion,
-                            static_cast<std::uint8_t>(impl_->pool->backend()),
-                            impl_->pool->import_params().data(),
-                            impl_->pool->import_params().size());
+    impl_->cache_pool(true);
     int n = impl_->server->broadcast_pool();
     n += impl_->server->accept_and_handshake(0);
     return n;

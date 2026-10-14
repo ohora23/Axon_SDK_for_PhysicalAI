@@ -20,6 +20,7 @@ so verification never freezes the desktop. Tooling lives in
 | 3 | syscalls | axon payload path is **0 transport syscalls / frame** vs ROS2 (25× total) | none | ✅ |
 | 4 | memory/cache | ROS2 spends **8.6× the cache-misses** copying payloads; axon doesn't | perf (paranoid≤1) | ✅ |
 | 5 | eBPF copy | direct `copy_to_user` byte count | sudo | tool |
+| 6 | Jetson NvBufSurface | **camera → CUDA with no copy** across processes on a real Jetson + UVC camera | none | ✅ |
 
 ## 0. Resource harness (freeze protection)
 
@@ -148,6 +149,35 @@ sudo instrumentation/ebpf/run_copy_compare.sh 2 4
 
 `bpftrace` counts `_copy_to_user`/`_copy_from_user` bytes by process. The only tool that
 still needs root; §1–§4 already quantify the copy cost without it.
+
+## 6. Jetson — camera → CUDA zero-copy via NvBufSurface (AGX Xavier) ✅
+
+The one section run on a real board, not the workstation above.
+
+> **Environment.** NVIDIA Jetson AGX Xavier, L4T R35.6.4 (JetPack 5.1.6), kernel
+> 5.10.216-tegra, CUDA 11.4 · Logitech Webcam Pro 9000 (UVC, YUYV 640×480).
+
+```bash
+instrumentation/jetson/build.sh          # on the board (needs jetson_multimedia_api)
+instrumentation/jetson/nvbuf_probe /dev/video0
+```
+
+`nvbuf_probe` forks before any CUDA init; the parent allocates 4 `NvBufSurface`
+(`NVBUF_MEM_SURFACE_ARRAY`, YUYV pitch-linear) and captures 30 frames, the child
+receives the FDs over `SCM_RIGHTS`. Same result on 3/3 runs:
+
+| # | Question | Result |
+|---|---|---|
+| P1 | Does UVC capture straight **into** an NvBufSurface? | ✅ accepted as `V4L2_MEMORY_DMABUF` targets (`bytesperline` = surface pitch 1280) |
+| P2 | Does the FD resolve in another process? | ✅ via `NvBufSurfaceImport` + the producer's `NvBufSurfaceGetMapParams` (520 B POD). `NvBufSurfaceFromFd` **fails** cross-process |
+| P3 | Can CUDA address the same memory with no copy? | ✅ EGLImage → `cuGraphicsEGLRegisterImage`: device hash == CPU hash on **30/30** frames; a GPU `cuMemsetD8` is read back by the producer |
+| P4 | Is a plain `mmap()` of the FD coherent? | ✅ **30/30** — axon's existing host path works unchanged |
+
+Also on the same board: the CUDA VMM accelerator pool (§1) passes `test_accel_e2e`, and the
+week-1 spike PoC runs against the real camera (staleness 0.07–0.1 ms).
+
+Pitfalls found: an imported surface has `numFilled = 0`, so `NvBufSurfaceSyncForCpu`
+rejects index 0 until it is set to 1; JetPack 5 ships cmake 3.16 (axon needs ≥ 3.22).
 
 ## Appendix — perf privilege setup
 

@@ -55,8 +55,8 @@ struct Buffer {
     unsigned long long accel_h = 0; // CUmemGenericAllocationHandle (for free)
     std::size_t accel_size = 0;     // granularity-aligned size
     // NvBufSurface backend only:
-    void* nvbuf_surf = nullptr;     // NvBufSurface*
-    std::uint32_t pitch = 0;        // row pitch of plane 0
+    void*          nvbuf_surf = nullptr;  // NvBufSurface*
+    std::uint32_t  pitch = 0;            // row pitch of plane 0
 };
 
 int make_sealed_memfd(std::size_t size) {
@@ -84,6 +84,12 @@ struct TensorPool::Impl {
     std::vector<int> share_fds;           // cached view for dma_buf_fds()
     std::vector<bool> in_use;
     std::size_t ring_head = 0;
+    std::vector<std::uint8_t> import_blob;  // NvBufSurface import params
+#if AXON_ENABLE_JETSON
+    // Lazy per-buffer CUDA view of NvBufSurface buffers, mapped on the first
+    // device_ptr() so creating a pool never initializes CUDA (callers may fork).
+    std::vector<detail::NvBufCuda> nvcudas;
+#endif
 
     // V4L2-only state.
     int v4l2_fd = -1;
@@ -186,6 +192,7 @@ bool TensorPool::Impl::allocate_accelerator() {
 bool TensorPool::Impl::allocate_nvbufsurface() {
 #if AXON_ENABLE_JETSON
     std::size_t max_size = 0;
+    std::size_t psz = detail::nvbuf_import_params_size();
     for (std::size_t i = 0; i < cfg.n_buffers; ++i) {
         detail::NvBuf nb;
         if (!detail::nvbuf_alloc(cfg.width, cfg.height, cfg.fourcc, &nb)) return false;
@@ -197,6 +204,16 @@ bool TensorPool::Impl::allocate_nvbufsurface() {
         buffers.push_back(b);
     }
     buffer_size = page_round_up(max_size);
+    nvcudas.assign(buffers.size(), detail::NvBufCuda{});
+    import_blob.resize(buffers.size() * psz);
+    for (std::size_t i = 0; i < buffers.size(); ++i) {
+        if (!detail::nvbuf_get_import_params(
+                detail::NvBuf{buffers[i].nvbuf_surf, buffers[i].share_fd, 0, buffers[i].pitch},
+                import_blob.data() + i * psz)) {
+            import_blob.clear();
+            return false;
+        }
+    }
     return true;
 #else
     errno = ENOSYS;   // built without Jetson support
@@ -222,18 +239,20 @@ bool TensorPool::Impl::allocate() {
 }
 
 void TensorPool::Impl::free_all() {
-    for (auto& b : buffers) {
+    for (std::size_t i = 0; i < buffers.size(); ++i) {
+        Buffer& b = buffers[i];
+#if AXON_ENABLE_JETSON
+        if (b.nvbuf_surf) {   // NvBufSurface: unmap CUDA then destroy surface
+            detail::NvBuf nb{b.nvbuf_surf, b.share_fd, 0, 0};
+            if (i < nvcudas.size()) detail::nvbuf_cuda_unmap(nb, &nvcudas[i]);
+            detail::nvbuf_free(&nb);
+            continue;
+        }
+#endif
 #if AXON_WITH_CUDA
         if (b.device_ptr) {   // Accelerator: unmap/free device memory + close export FD
             detail::AccelBuffer ab{b.device_ptr, b.share_fd, b.accel_size, b.accel_h};
             detail::accel_free(&ab);
-            continue;
-        }
-#endif
-#if AXON_ENABLE_JETSON
-        if (b.nvbuf_surf) {   // NvBufSurface: destroy surface (closes FD internally)
-            detail::NvBuf nb{b.nvbuf_surf, b.share_fd, 0, 0};
-            detail::nvbuf_free(&nb);
             continue;
         }
 #endif
@@ -243,6 +262,10 @@ void TensorPool::Impl::free_all() {
     buffers.clear();
     share_fds.clear();
     in_use.clear();
+    import_blob.clear();
+#if AXON_ENABLE_JETSON
+    nvcudas.clear();
+#endif
     if (v4l2_fd >= 0) { ::close(v4l2_fd); v4l2_fd = -1; }
 }
 
@@ -277,11 +300,28 @@ PoolBackend TensorPool::backend() const noexcept {
 }
 
 void* TensorPool::device_ptr(std::size_t index) const noexcept {
-    return index < impl_->buffers.size() ? impl_->buffers[index].device_ptr : nullptr;
+    if (index >= impl_->buffers.size()) return nullptr;
+    const auto& b = impl_->buffers[index];
+#if AXON_ENABLE_JETSON
+    if (b.nvbuf_surf) {
+        detail::NvBufCuda& c = impl_->nvcudas[index];   // impl_ is non-const here
+        if (!c.device_ptr && !c.failed) {
+            detail::NvBuf nb{b.nvbuf_surf, b.share_fd, 0, b.pitch};
+            c.failed = !detail::nvbuf_cuda_map(nb, &c);   // null if CUDA is unavailable
+        }
+        return c.device_ptr;
+    }
+#endif
+    return b.device_ptr;
 }
 
 std::uint32_t TensorPool::row_pitch() const noexcept {
     return impl_->buffers.empty() ? 0 : impl_->buffers[0].pitch;
+}
+
+const std::vector<std::uint8_t>& TensorPool::import_params() const noexcept {
+    static const std::vector<std::uint8_t> empty;
+    return impl_->import_blob.empty() ? empty : impl_->import_blob;
 }
 
 int TensorPool::acquire_next() {

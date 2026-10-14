@@ -19,6 +19,7 @@
 #include "axon/detail/accelerator.h"
 #include "axon/detail/descriptor_util.h"
 #include "axon/detail/metadata_channel.h"
+#include "axon/detail/nvbuf.h"
 #include "axon/detail/sidecar.h"
 #include "axon/pool.h"
 #include "axon/rt.h"
@@ -41,6 +42,10 @@ struct TensorSubscriber::Impl {
     bool device_backed = false;
     std::vector<void*> device_ptrs;
     std::vector<detail::AccelBuffer> accel_bufs;
+#if AXON_ENABLE_JETSON
+    std::vector<detail::NvBuf> nvbufs;       // imported NvBufSurface per buffer
+    std::vector<detail::NvBufCuda> nvcudas;  // CUDA view per buffer
+#endif
 
     FallbackPolicy fallback = FallbackPolicy::LastKnownGood;
 
@@ -92,6 +97,14 @@ struct TensorSubscriber::Impl {
 #if AXON_WITH_CUDA
         for (auto& ab : accel_bufs) detail::accel_free(&ab);  // unmap device memory
 #endif
+#if AXON_ENABLE_JETSON
+        for (std::size_t i = 0; i < nvbufs.size(); ++i) {
+            detail::nvbuf_cuda_unmap(nvbufs[i], &nvcudas[i]);
+            detail::nvbuf_free(&nvbufs[i]);
+        }
+        nvbufs.clear();
+        nvcudas.clear();
+#endif
         for (int fd : fds) {
             if (fd >= 0) ::close(fd);   // non-RT owner closes (design doc §1.3.5)
         }
@@ -131,8 +144,13 @@ int TensorSubscriber::wait_handshake(int timeout_ms) {
 
     detail::PoolHandshakeHeader hdr {};
     std::vector<int> received;
-    if (s.client->recv_pool_handshake(&hdr, &received, timeout_ms) < 0) return -1;
-    if (hdr.wire_version != kWireVersion) { errno = EPROTO; return -1; }
+    std::vector<std::uint8_t> ext;
+    if (s.client->recv_pool_handshake(&hdr, &received, timeout_ms, &ext) < 0) return -1;
+    if (hdr.wire_version != kWireVersion) {
+        for (int fd : received) ::close(fd);
+        errno = EPROTO;
+        return -1;
+    }
 
     // Attach: cache FDs, then either host-mmap (UMA backends) or device-import
     // (Accelerator) each buffer as a zero-copy view.
@@ -175,6 +193,24 @@ int TensorSubscriber::wait_handshake(int timeout_ms) {
             }
         }
     }
+
+    // Jetson NvBufSurface: import FDs + map CUDA device view from the ext blob.
+#if AXON_ENABLE_JETSON
+    // The device view is optional: a malformed blob just leaves device_ptr null.
+    const std::size_t psz = detail::nvbuf_import_params_size();
+    if (hdr.backend == static_cast<std::uint8_t>(PoolBackend::NvBufSurface) &&
+        ext.size() == s.fds.size() * psz) {
+        s.nvbufs.resize(s.fds.size());
+        s.nvcudas.resize(s.fds.size());
+        s.device_ptrs.resize(s.fds.size(), nullptr);
+        for (std::size_t i = 0; i < s.fds.size(); ++i) {
+            if (detail::nvbuf_import(s.fds[i], ext.data() + i * psz, &s.nvbufs[i])) {
+                detail::nvbuf_cuda_map(s.nvbufs[i], &s.nvcudas[i]);
+                s.device_ptrs[i] = s.nvcudas[i].device_ptr;  // nullptr on CUDA failure
+            }
+        }
+    }
+#endif
 
     // Open the metadata plane (seqlock slot).
     delete s.meta;
@@ -223,10 +259,13 @@ std::optional<TensorView> TensorSubscriber::latest_view(int max_retry) noexcept 
                                                    : s.views.size();
         if (fence_ready && idx < nbufs) {
             TensorView v {};
-            void* base = s.device_backed ? s.device_ptrs[idx] : s.views[idx];
-            char* p = base ? static_cast<char*>(base) + desc.offset : nullptr;
-            v.data       = s.device_backed ? nullptr : p;
-            v.device_ptr = s.device_backed ? p : nullptr;
+            void* host = s.device_backed ? nullptr : s.views[idx];
+            void* dev  = s.device_backed ? s.device_ptrs[idx]
+                       : (idx < s.device_ptrs.size() ? s.device_ptrs[idx] : nullptr);
+            char* hp = host ? static_cast<char*>(host) + desc.offset : nullptr;
+            char* dp = dev  ? static_cast<char*>(dev)  + desc.offset : nullptr;
+            v.data       = hp;   // null for device-backed (Accelerator) frames
+            v.device_ptr = dp;   // Accelerator, or NvBufSurface with a CUDA view
             v.accel_handle = AcceleratorHandle{nullptr, PoolBackend::Custom, s.buffer_size};
             v.shape.rank = desc.rank;
             for (std::uint8_t i = 0; i < kMaxRank; ++i) v.shape.dims[i] = desc.shape[i];

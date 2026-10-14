@@ -67,6 +67,10 @@ public:
     // padded rows. Returns 0 for every other backend.
     std::uint32_t row_pitch() const noexcept;
 
+    // Backend-specific per-buffer import blob shipped with the sidecar handshake
+    // (NvBufSurface: n_buffers × NvBufSurfaceMapParams, buffer order). Empty otherwise.
+    const std::vector<std::uint8_t>& import_params() const noexcept;
+
     // Acquire the next free buffer. Advances the ring by one slot.
     // The returned index maps into dma_buf_fds()[index].
     int acquire_next();

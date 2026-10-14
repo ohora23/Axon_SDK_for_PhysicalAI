@@ -87,6 +87,10 @@ if(AXON_ENABLE_JETSON)
     target_include_directories(axon PRIVATE ${AXON_JETSON_MMAPI}/include)
     target_compile_definitions(axon PUBLIC AXON_ENABLE_JETSON=1)
     target_link_libraries(axon PUBLIC ${NVBUFSURFACE_LIB})
+    if(AXON_WITH_CUDA)   # device view: NvBufSurface → EGLImage → CUDA
+        find_library(EGL_LIB EGL REQUIRED)
+        target_link_libraries(axon PUBLIC ${EGL_LIB})
+    endif()
 endif()
 
 # Enable testing before descending into subdirectories so that add_test() calls

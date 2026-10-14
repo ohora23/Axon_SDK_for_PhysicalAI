@@ -1,0 +1,2 @@
+add_executable(axon_jetson_camera jetson_camera_demo.cpp)
+target_link_libraries(axon_jetson_camera PRIVATE axon CUDA::cuda_driver)

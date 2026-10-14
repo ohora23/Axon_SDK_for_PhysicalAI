@@ -20,3 +20,8 @@ endif()
 if(AXON_WITH_CUDA AND IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/accelerator_pool)
     add_subdirectory(accelerator_pool)
 endif()
+
+# Jetson camera → CUDA zero-copy demo — needs the NvBufSurface backend + CUDA.
+if(AXON_ENABLE_JETSON AND AXON_WITH_CUDA AND IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/jetson_camera)
+    add_subdirectory(jetson_camera)
+endif()

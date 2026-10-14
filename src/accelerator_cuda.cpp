@@ -14,6 +14,7 @@ namespace axon::detail {
 namespace {
 
 bool g_init = false;
+CUcontext g_ctx = nullptr;
 
 inline bool ck(CUresult r) { return r == CUDA_SUCCESS; }
 
@@ -63,11 +64,13 @@ bool map_rw(CUmemGenericAllocationHandle h, std::size_t sz, CUdeviceptr* out_ptr
 }  // namespace
 
 bool accel_init() {
-    if (g_init) return true;
+    // The context is current per THREAD, so re-bind it on every call (cheap) —
+    // a pool or subscriber may be driven from a different thread than the one
+    // that first initialized CUDA.
+    if (g_init) return ck(cuCtxSetCurrent(g_ctx));
     CUdevice dev;
-    CUcontext ctx;
     if (!ck(cuInit(0)) || !ck(cuDeviceGet(&dev, 0)) ||
-        !ck(cuDevicePrimaryCtxRetain(&ctx, dev)) || !ck(cuCtxSetCurrent(ctx)))
+        !ck(cuDevicePrimaryCtxRetain(&g_ctx, dev)) || !ck(cuCtxSetCurrent(g_ctx)))
         return false;
     g_init = true;
     return true;

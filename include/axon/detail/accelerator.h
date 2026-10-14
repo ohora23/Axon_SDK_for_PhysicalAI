@@ -21,7 +21,8 @@ struct AccelBuffer {
     unsigned long long handle     = 0;         // CUmemGenericAllocationHandle (for free)
 };
 
-// One-time driver init + primary context on device 0. false if CUDA absent.
+// Driver init + primary context on device 0, made current on the calling
+// thread (every call). false if CUDA absent.
 bool accel_init();
 
 // Allocate one device buffer >= size, mapped + exported. false on any failure.

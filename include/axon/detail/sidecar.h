@@ -33,7 +33,7 @@ enum class SidecarMsg : std::uint8_t {
 struct PoolHandshakeHeader {
     std::uint8_t  msg;              // == SidecarMsg::PoolHandshake
     std::uint8_t  backend;         // PoolBackend — host-mmap vs device-import
-    std::uint8_t  reserved0[2];
+    std::uint16_t ext_len;         // bytes of backend import blob after this header
     std::uint32_t wire_version;
     std::uint32_t pool_generation;
     std::uint32_t n_buffers;
@@ -46,6 +46,9 @@ struct SyncFenceHeader {
     std::uint8_t  reserved0[7];
     std::uint64_t sync_fence_token;
 };
+
+static_assert(sizeof(PoolHandshakeHeader) == 24,
+              "PoolHandshakeHeader size changed");
 
 // Derive the Unix-socket path for a service name (sanitized, under /tmp).
 std::string sidecar_socket_path(const std::string& service_name);
@@ -78,9 +81,12 @@ public:
     ~SidecarServer();
 
     // Cache the current pool bundle. Does not transmit on its own.
+    // `ext` / `ext_len` — backend-specific import blob streamed after the header;
+    // rejected (cached as null) if ext_len > 65535.
     void set_pool(const std::vector<int>& fds, std::uint32_t pool_generation,
                   std::uint64_t buffer_size, std::uint32_t wire_version,
-                  std::uint8_t backend);
+                  std::uint8_t backend,
+                  const void* ext = nullptr, std::size_t ext_len = 0);
 
     // Accept every consumer connection that is pending within `timeout_ms`
     // (0 = poll once, non-blocking) and send the cached bundle to each new
@@ -117,8 +123,10 @@ public:
 
     // Block (up to timeout_ms) for the bulk pool handshake. On success fills the
     // header and appends received FDs (caller owns them) to fds_out.
+    // If `ext_out` is non-null, the backend import blob (if any) is written there.
     int recv_pool_handshake(PoolHandshakeHeader* header_out,
-                            std::vector<int>* fds_out, int timeout_ms);
+                            std::vector<int>* fds_out, int timeout_ms,
+                            std::vector<std::uint8_t>* ext_out = nullptr);
 
     // Non-blocking drain of any pending sync-fence messages. For each one,
     // invokes the provided sink with (token, fd). Returns the count processed.

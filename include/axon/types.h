@@ -76,6 +76,7 @@ enum class PoolBackend : std::uint8_t {
     UDMABUF     = 1,  // Expose user-space buffers as dma-bufs via udmabuf
     Custom      = 2,  // User-defined (caller injects external dma-buf FDs)
     Accelerator = 3,  // CUDA VMM device buffers, POSIX-FD shareable (AXON_WITH_CUDA)
+    NvBufSurface = 4, // Jetson NvBufSurface (SURFACE_ARRAY) dma-bufs (AXON_ENABLE_JETSON)
 };
 
 // ---------- Fallback policy ----------

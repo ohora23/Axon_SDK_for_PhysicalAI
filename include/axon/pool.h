@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <vector>
 #include "axon/types.h"
@@ -19,14 +20,23 @@ struct TensorPoolConfig {
                                // producer can't lap a consumer mid-read:
                                // ceil(T_hold × f_produce) + M + margin.
                                // See docs/usage.md "Delivery semantics".
-    std::size_t buffer_size;   // Bytes per buffer
+    std::size_t buffer_size;   // Bytes per buffer (may be 0 for NvBufSurface)
     PoolBackend backend;
     const char* v4l2_device;   // Used when backend == V4L2 (e.g. "/dev/video0")
+
+    // NvBufSurface backend only: image geometry + V4L2 fourcc (YUYV, GREY, RGBA32).
+    // buffer_size may be 0 then — the surface's own allocation size is used.
+    std::uint32_t width  = 0;
+    std::uint32_t height = 0;
+    std::uint32_t fourcc = 0;
 };
 
 // dma-buf-backed buffer pool.
 // V4L2 backend: VIDIOC_REQBUFS + VIDIOC_EXPBUF to extract FDs.
 // UDMABUF backend: expose user-space memory as dma-buf via udmabuf.
+// Custom backend: memfd-backed buffers (always available).
+// Accelerator backend: CUDA VMM device buffers (AXON_WITH_CUDA).
+// NvBufSurface backend: Jetson NvBufSurface SURFACE_ARRAY dma-bufs (AXON_ENABLE_JETSON).
 class TensorPool {
 public:
     static std::unique_ptr<TensorPool> create(const TensorPoolConfig& cfg);
@@ -51,6 +61,11 @@ public:
     // index. Valid only in the process that owns the pool — consumers import
     // the corresponding exported FD from dma_buf_fds() instead.
     void* device_ptr(std::size_t index) const noexcept;
+
+    // Row stride (bytes per row of plane 0). Meaningful for NvBufSurface pools
+    // so producers pass it as the descriptor row_pitch and consumers index
+    // padded rows. Returns 0 for every other backend.
+    std::uint32_t row_pitch() const noexcept;
 
     // Acquire the next free buffer. Advances the ring by one slot.
     // The returned index maps into dma_buf_fds()[index].

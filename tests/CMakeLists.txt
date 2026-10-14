@@ -33,3 +33,12 @@ if(AXON_WITH_CUDA)
         set_tests_properties(test_accel_e2e PROPERTIES TIMEOUT 60)
     endif()
 endif()
+
+# NvBufSurface pool e2e — Jetson only (AXON_ENABLE_JETSON).
+if(AXON_ENABLE_JETSON)
+    add_executable(test_nvbuf_pool test_nvbuf_pool.cpp)
+    target_link_libraries(test_nvbuf_pool PRIVATE axon)
+    target_include_directories(test_nvbuf_pool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME test_nvbuf_pool COMMAND test_nvbuf_pool)
+    set_tests_properties(test_nvbuf_pool PROPERTIES TIMEOUT 60)
+endif()

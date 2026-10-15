@@ -21,6 +21,7 @@ so verification never freezes the desktop. Tooling lives in
 | 4 | memory/cache | ROS2 spends **8.6× the cache-misses** copying payloads; axon doesn't | perf (paranoid≤1) | ✅ |
 | 5 | eBPF copy | direct `copy_to_user` byte count | sudo | tool |
 | 6 | Jetson NvBufSurface | **camera → CUDA with no copy** across processes on a real Jetson + UVC camera | none | ✅ |
+| 7 | 1 kHz RT jitter | `cyclictest` worst case on the Jetson — stock-kernel baseline measured; PREEMPT_RT run pending | sudo (once) | 🟡 |
 
 ## 0. Resource harness (freeze protection)
 
@@ -178,6 +179,41 @@ week-1 spike PoC runs against the real camera (staleness 0.07–0.1 ms).
 
 Pitfalls found: an imported surface has `numFilled = 0`, so `NvBufSurfaceSyncForCpu`
 rejects index 0 until it is set to 1; JetPack 5 ships cmake 3.16 (axon needs ≥ 3.22).
+
+## 7. 1 kHz RT jitter on the Jetson (AGX Xavier) 🟡
+
+Target: worst-case wake-up jitter **< 100 µs** for a 1 kHz control loop. Same board as §6.
+Scripts: [`instrumentation/jetson/rt/`](../instrumentation/jetson/rt/).
+
+```bash
+instrumentation/jetson/rt/run_jitter.sh baseline 300   # on the board: idle, then stress-ng
+```
+
+`cyclictest -m -p 95 -t -a -i 1000` (SCHED_FIFO 95, `mlockall`, one thread per CPU,
+1 ms period), 5 min idle and 5 min under `stress-ng --cpu 8 --io 2 --vm 2`.
+nvpmodel `MODE_30W_ALL`, governor `schedutil`.
+
+**Baseline — stock kernel `5.10.216-tegra` (`CONFIG_PREEMPT`, not RT):**
+
+| Condition | Avg (per CPU) | Worst | Samples > 1 ms |
+|---|---|---|---|
+| idle | 34–38 µs | **1,138 µs** | 1 / 2.4 M |
+| stress-ng load | 57–61 µs | **1,263 µs** | 177 / 2.4 M |
+
+The stock kernel misses the target by >10×, so the RT number needs a PREEMPT_RT kernel.
+NVIDIA publishes prebuilt RT kernels only for r36 (Orin); for Xavier on r35,
+`build-rt.sh` cross-builds one from the L4T r35.6.4 public sources with their bundled
+`rt-patches` (`5.10.216-rt108-tegra`, ~10 min on a 9800X3D), and `install-rt.sh` adds it as
+an extlinux entry next to the stock kernel. **Status:** the first boot of that kernel did
+not come back on the network (Tailscale and LAN both silent); diagnosis needs the board's
+console. The config diff against the stock kernel is only the RT switches — root-fs (NVMe,
+PCIe) and the USB-Ethernet (`r8152`) drivers are built in on both.
+
+Pitfall: the stock Jetson kernel has `CONFIG_RT_GROUP_SCHED=y` and systemd gives
+`user.slice` `cpu.rt_runtime_us = 0`, so SCHED_FIFO fails with `EPERM` **even with**
+`rtprio 99` in `limits.d` — an axon RT loop run from a login shell hits the same wall.
+Fix: `echo 950000 | sudo tee /sys/fs/cgroup/cpu,cpuacct/user.slice/cpu.rt_runtime_us`
+(not persistent), or a kernel without `RT_GROUP_SCHED` (`build-rt.sh` turns it off).
 
 ## Appendix — perf privilege setup
 

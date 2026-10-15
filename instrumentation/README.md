@@ -10,6 +10,7 @@ Every run goes through a **resource harness** so verification never freezes the 
 |---|---|---|---|
 | `gpu/gpu_sidecar_demo` | axon sidecar carries a **real GPU memory handle** → zero-copy GPU↔GPU across processes | none | ✅ verified |
 | `jetson/nvbuf_probe` | on a Jetson: UVC camera → NvBufSurface → another process's CUDA, **no copy** (needs the board) | none | ✅ verified |
+| `jetson/rt/run_jitter.sh` | 1 kHz `cyclictest` worst case, idle and under load; `build-rt.sh`/`install-rt.sh` make a Xavier PREEMPT_RT kernel | sudo (once) | 🟡 baseline only |
 | `perf/run_pagefaults.sh` | RT loop adds **0 page faults/frame** (mlockall/MAP_POPULATE) | none | ✅ verified |
 | `perf/run_syscalls.sh` | axon payload path is **0 transport syscalls/frame** vs ROS2's DDS | none | ✅ verified |
 | `perf/run_membw.sh` | ROS2 burns **8.6× the cache-misses** copying payloads; axon doesn't | perf (paranoid≤1) | ✅ verified |

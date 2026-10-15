@@ -41,7 +41,7 @@
 
 ## 2. 남은 작업 (Next)
 
-- [ ] **PREEMPT_RT 커널에서 `cyclictest` 1 kHz jitter 측정** — 타깃 보드 필요
+- [ ] **PREEMPT_RT 커널에서 `cyclictest` 1 kHz jitter 측정** — **진행 중, 보드 다운**: 기준선(stock 커널) 최악 1,138 µs(무부하)/1,263 µs(부하). 직접 빌드한 `5.10.216-rt108-tegra`로 재부팅한 뒤 hermes-head가 응답하지 않음. 콘솔에서 부팅 메뉴 `primary kernel` 선택 → `/boot/extlinux/extlinux.conf`의 `DEFAULT`를 `primary`로 복구 → `journalctl -b -1`로 원인 확인. 빌드 스크립트: 호스트 `~/z_Setup_NvidiaXavier/rt-kernel/build-rt.sh`
 - [ ] **AMD XDNA 백엔드** (`AXON_ENABLE_AMD_XDNA`) — 하드웨어 없음 (이 PC 9800X3D엔 NPU 없음)
 - [ ] **실제 로봇 통합** — 실 센서(UVC 웹캠)는 Jetson에서 검증 완료
 

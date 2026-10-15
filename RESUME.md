@@ -1,7 +1,7 @@
 # 다음 세션에서 이어서 작업하기
 
 > 본 문서는 Axon 작업을 다른 시점/세션에서 이어가기 위한 **현황 + 체크리스트 + 명령어 모음**입니다.
-> 마지막 갱신: 2026-10-15 (main = `ec29b99`, PR #41까지 머지 — Jetson 백엔드 완료, hermes-head를 Axon 전용 보드로 전환)
+> 마지막 갱신: 2026-10-15 (main = `f313e7f`, PR #42까지 머지 — Jetson 백엔드 완료, hermes-head를 Axon 전용 보드로 전환)
 
 ---
 
@@ -41,7 +41,7 @@
 
 ## 2. 남은 작업 (Next)
 
-- [ ] **PREEMPT_RT 커널에서 `cyclictest` 1 kHz jitter 측정** — **진행 중, 보드 다운**: 기준선(stock 커널) 최악 1,138 µs(무부하)/1,263 µs(부하). 직접 빌드한 `5.10.216-rt108-tegra`로 재부팅한 뒤 hermes-head가 응답하지 않음. 콘솔에서 부팅 메뉴 `primary kernel` 선택 → `/boot/extlinux/extlinux.conf`의 `DEFAULT`를 `primary`로 복구 → `journalctl -b -1`로 원인 확인. 빌드 스크립트: 호스트 `~/z_Setup_NvidiaXavier/rt-kernel/build-rt.sh`
+- [ ] **PREEMPT_RT 커널에서 `cyclictest` 1 kHz jitter 측정** — **진행 중, 보드 다운**: 기준선(stock 커널) 최악 1,138 µs(무부하)/1,263 µs(부하). 직접 빌드한 `5.10.216-rt108-tegra`로 재부팅한 뒤 hermes-head가 응답하지 않음. 콘솔에서 부팅 메뉴 `primary kernel` 선택 → `/boot/extlinux/extlinux.conf`의 `DEFAULT`를 `primary`로 복구 → `journalctl -b -1`로 원인 확인. 빌드·설치·측정 스크립트: `instrumentation/jetson/rt/` (#42), 결과 문서 `docs/hardware-verification.md` §7. 빌드 산출물은 호스트 `~/z_Setup_NvidiaXavier/rt-kernel/`
 - [ ] **AMD XDNA 백엔드** (`AXON_ENABLE_AMD_XDNA`) — 하드웨어 없음 (이 PC 9800X3D엔 NPU 없음)
 - [ ] **실제 로봇 통합** — 실 센서(UVC 웹캠)는 Jetson에서 검증 완료
 

@@ -157,7 +157,7 @@ Fast-RTPS on the same workload. Full detail: [docs/hardware-verification.md](doc
 | GPU zero-copy import | real hardware | **RTX 5080: 200/200 frames, 0 copies, 1.68 GB** ✅ |
 | Sensor → accelerator, no copy | real board + real sensor | **AGX Xavier + UVC webcam: host == CUDA view on 30/30 frames, staleness ~0.5 ms** ✅ |
 | Staleness bound | sum of 7 explicit terms | deterministic formula (§5) ✅ |
-| 1kHz RT worst-case jitter | < 100µs | pending PREEMPT_RT kernel 🟡 |
+| 1kHz RT worst-case jitter | < 100µs | stock Jetson kernel 1.26 ms (baseline); PREEMPT_RT run pending 🟡 |
 
 The formula:
 ```

@@ -151,7 +151,7 @@ flowchart LR
 | GPU zero-copy import | 실제 하드웨어 | **RTX 5080: 200/200 프레임, 복사 0, 1.68 GB** ✅ |
 | 센서 → 가속기, 복사 없음 | 실제 보드 + 실제 센서 | **AGX Xavier + UVC 웹캠: host == CUDA view 30/30 프레임, staleness ~0.5 ms** ✅ |
 | Staleness 한계 | 명시적 7개 항의 합 | 결정적 산식 (§5) ✅ |
-| 1kHz RT 최악 지터 | < 100µs | PREEMPT_RT 커널 대기 🟡 |
+| 1kHz RT 최악 지터 | < 100µs | Jetson 기본 커널 1.26 ms(기준선), PREEMPT_RT 측정 대기 🟡 |
 
 산식:
 ```

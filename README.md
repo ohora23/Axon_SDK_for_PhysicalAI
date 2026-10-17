@@ -49,7 +49,7 @@ flowchart LR
 
 Green = payload, referenced in place and never copied. Blue = the only thing that crosses the queue. (The concrete per-stage pipeline is in [Data Flow at a Glance](#data-flow-at-a-glance); the copy-heavy ROS2/DDS path it replaces is the 4-copy chain that path removes.)
 
-**What you get** — transport cost is **O(1) in payload size**, so as bandwidth grows axon CPU stays flat while ROS2/DDS scales with the bytes it copies. Measured on this dev PC:
+**What you get** — the transport itself is **O(1) in payload size**: only the descriptor crosses, so the payload is written once, where the producer puts it, and never copied again on the way to a GPU or an RT loop. Measured on this dev PC:
 
 ### Headline results (measured, RTX 5080 / Ryzen 9800X3D vs ROS 2 Jazzy / Fast DDS)
 
@@ -57,8 +57,7 @@ Green = payload, referenced in place and never copied. Blue = the only thing tha
 |---|---|
 | GPU → GPU across processes, 4 MiB (vs ROS 2 loaned messages + data-sharing, C++) | **20× lower** latency (25 µs vs 489 µs) |
 | Host → host, 1 MiB (same comparison) | **2.3× lower** (15 µs vs 34 µs); 1.3× at 4 MiB |
-| Multi-stream CPU @ 295 MB/s (vs rclpy) | **3.3× less** + zero dropped frames |
-| Memory, same bytes (vs rclpy) | **8.6× fewer cache-misses**, ~0 syscalls/frame |
+| Multi-stream robot workload @ 297 MB/s (same comparison) | **~4× less CPU** (0.014 vs 0.053 cores), **5× fewer cache-misses**, every frame delivered |
 | RT loop page faults | **0 / frame** |
 | GPU cross-process share | **zero-copy**, 200/200 frames, 1.68 GB |
 | VLM encoder→LLM handoff (video 34 MB) | **36× faster** than a host round-trip |
@@ -151,9 +150,9 @@ Fast-RTPS on the same workload. Full detail: [docs/hardware-verification.md](doc
 | Metric | Target | Measured (axon vs ROS2) |
 |---|---|---|
 | Latency vs ROS 2's zero-copy path (C++, loaned messages + data-sharing) | low | **host 1 MiB: 15 vs 34 µs (2.3×); GPU→GPU 4 MiB: 25 vs 489 µs (20×)** ✅ |
-| CPU at 295 MB/s (multi-stream, vs rclpy) | flat in bandwidth | **0.30 vs 0.98 cores — 3.3× less** ✅ (C++ rerun pending) |
-| Frame delivery under load (vs rclpy) | no drops | **100 % vs ~96.7 %** ✅ |
-| Memory copies (same bytes, vs rclpy) | 0 payload copies | **cache-misses 8.6× lower; ~0 transport syscalls/frame** ✅ |
+| CPU at 297 MB/s (multi-stream, C++, vs ROS 2 zero-copy) | low | **0.014 vs 0.053 cores — ~4× less** (both under 0.1 core) ✅ |
+| Frame delivery under load (C++) | no drops | **axon and ROS 2 zero-copy 100 %; rclcpp `UInt8MultiArray` 40-92 % on one camera** ✅ |
+| Memory cost (same workload, C++, vs ROS 2 zero-copy) | 0 payload copies | **cache-misses 5× lower (0.88 vs 4.38 M/s); ~0 transport syscalls/frame** ✅ |
 | Page faults during RT | **0** | **0 / frame** (flat at 20× the frames) ✅ |
 | GPU zero-copy import | real hardware | **RTX 5080: 200/200 frames, 0 copies, 1.68 GB** ✅ |
 | Sensor → accelerator, no copy | real board + real sensor | **AGX Xavier + UVC webcam: host == CUDA view on 30/30 frames, staleness ~0.5 ms** ✅ |
@@ -172,17 +171,24 @@ worst_case_staleness ≤
 
 ## Measured Results
 
-The thesis is that transport cost is **O(1) in payload size**: only fixed-size descriptors
-cross the metadata plane while the tensor stays in a shared dma-buf. So as sensor bandwidth
-grows, axon's CPU stays flat while ROS2/DDS scales with the payload it serializes and copies.
+The thesis is that the transport is **O(1) in payload size**: only fixed-size descriptors
+cross the metadata plane while the tensor stays in a shared dma-buf, so the payload is written
+once and never copied on the way.
 
-**CPU stays flat as bandwidth grows** (serving-robot multi-stream workload, [`benchmarks/mock`](benchmarks/mock/README.md)):
+**The multi-stream robot workload, in C++** ([`benchmarks/ros2_cpp`](benchmarks/ros2_cpp/README.md#multi-stream-cpu-delivery-and-cache-misses)):
+four cameras plus LiDAR, IMU and odometry, scaled to 297 MB/s; ROS 2 in its event-driven executor, axon in a 1 kHz loop.
+
+| at 297 MB/s (median of 3) | rclcpp `UInt8MultiArray` | ROS 2 zero-copy | axon |
+|---|---|---|---|
+| CPU, producer + consumer | 0.093 cores | 0.053 cores | **0.014 cores** |
+| worst-stream delivery | 0.51 (0.50-0.92) | 1.000 | **1.000** |
+| cache-misses / instructions per second | 15.2 M / 0.208 B | 4.38 M / 0.123 B | **0.88 M / 0.023 B** |
+| camera p50 latency | 142 µs | 50 µs | 554 µs (waits for the 1 kHz tick) |
+
+In C++ every transport is cheap, so the CPU gap is real but small in absolute terms. axon's 1 kHz loop costs latency,
+since a frame waits on average half a tick. The rclpy sweep below (0.30 vs 0.98 cores) is almost all Python:
 
 ![CPU vs bandwidth](docs/assets/02_cpu_sweep.png)
-
-At 295 MB/s axon uses **0.30 cores vs ROS2's 0.98 (3.3×)** — and drops **zero** frames while
-ROS2's worst stream falls to ~96.7 %. The CPU axon *doesn't* spend on data plumbing is CPU
-left for perception and control.
 
 **Against ROS 2's own zero-copy path, in C++** ([`benchmarks/ros2_cpp`](benchmarks/ros2_cpp/README.md)). The plots above and below compare with rclpy (Python), and most of that gap is Python. Redone in rclcpp, against loaned messages + Fast DDS data-sharing (p50, µs, median of 3 runs):
 
@@ -202,7 +208,7 @@ On the host, ROS 2's zero-copy path is close: both copy the payload once into sh
 
 ![Memory cost](docs/assets/04_memory.png)
 
-ROS2 (rclpy) spends **8.6× the cache-misses** and **5× the instructions** moving the same data.
+ROS2 (rclpy) spends **8.6× the cache-misses** and **5× the instructions** moving the same data; in C++ against ROS 2's zero-copy path, counted over the same measured window, the gap is 5× and 5.3×.
 
 **Real GPU zero-copy without a robot board.** axon's FD sidecar carries a live RTX 5080 GPU
 memory handle across processes: 200/200 frames validated on-GPU, **0 host payload copies**,
@@ -423,12 +429,11 @@ Design → working library + measured results. Done (merged to `main`):
 - [x] **Direction A — vision→LLM zero-copy** — framework tensor ↔ axon GPU buffer via `__cuda_array_interface__` on both the producer (`device_array`) and the consumer (`latest_view`), plus consumer-side CUDA VMM import. Working two-process demo (`examples/vla_demo/`: DeiT-tiny → axon → GPT-2 prefill, same GPU pointer both sides, no host copy)
 - [x] **Jetson NvBufSurface backend** — `PoolBackend::NvBufSurface` (`AXON_ENABLE_JETSON`): a UVC camera captures straight into the pool and another process gets the frame as a host view **and** a CUDA pointer, no copy. Verified on AGX Xavier with a real webcam (`examples/jetson_camera/`, host==device 4/4, staleness ~0.5 ms)
 - [x] **Direction D — NVENC data flywheel** — record the stream to disk straight from the shared GPU buffer: the recorder feeds each `latest_view()` to hardware NVENC with no host copy (`examples/nvenc_flywheel/`, decode-verified H.264)
-- [x] **Fair C++ benchmark against ROS 2's zero-copy path** — rclcpp, loaned messages + Fast DDS data-sharing, host and GPU (`benchmarks/ros2_cpp/`): host 1 MiB 15 vs 34 µs, GPU→GPU 4 MiB 25 vs 489 µs
+- [x] **Fair C++ benchmark against ROS 2's zero-copy path** — rclcpp, loaned messages + Fast DDS data-sharing, host and GPU (`benchmarks/ros2_cpp/`): host 1 MiB 15 vs 34 µs, GPU→GPU 4 MiB 25 vs 489 µs; multi-stream at 297 MB/s 0.014 vs 0.053 cores
 
 Next:
 
 - [ ] `cyclictest` 1 kHz jitter on a PREEMPT_RT kernel (needs the target board)
-- [ ] Multi-stream CPU and cache-miss figures in C++ (the current ones are against rclpy)
 - [ ] AMD XDNA backend + real robot integration
 
 ---

@@ -8,6 +8,8 @@
 
 #include "axon/publisher.h"
 
+#include <cerrno>
+
 #include <atomic>
 #include <cstring>
 #include <string>
@@ -31,6 +33,7 @@ struct TensorPublisher::Impl {
     std::string service_name;
     TensorPool* pool = nullptr;
     std::size_t buffer_size = 0;
+    std::uint64_t rejected = 0;   // publish() calls refused (descriptor_error)
 
     detail::SidecarServer* server = nullptr;
     detail::MetadataChannel* meta = nullptr;
@@ -101,7 +104,11 @@ std::unique_ptr<TensorPublisher> TensorPublisher::create(
             if (sz > 0) pub->impl_->buffer_size = static_cast<std::size_t>(sz);
         }
     }
-    if (pub->impl_->buffer_size == 0) return nullptr;  // can't map buffers
+    if (pub->impl_->buffer_size == 0) { errno = EINVAL; return nullptr; }  // can't map buffers
+
+    // The import params ride the handshake header's 16-bit ext_len. Refuse a pool
+    // whose params don't fit rather than let consumers attach without a device view.
+    if (pool.import_params().size() > detail::kMaxHandshakeExt) { errno = E2BIG; return nullptr; }
 
     pub->impl_->server = detail::SidecarServer::create(pub->impl_->service_name);
     pub->impl_->meta = detail::MetadataChannel::create_publisher(pub->impl_->service_name);
@@ -144,18 +151,22 @@ AcquiredDescriptor TensorPublisher::acquire_descriptor() {
     return a;
 }
 
-void TensorPublisher::publish(AcquiredDescriptor&& d, int sync_fd) {
+int TensorPublisher::publish(AcquiredDescriptor&& d, int sync_fd) {
     TensorDescriptor* desc = d.desc;
+
+    // Reject a descriptor whose [offset, size) or row_pitch would read/write
+    // outside the buffer: publish nothing, and tell the caller.
+    if (int err = detail::descriptor_error(*desc, impl_->buffer_size)) {
+        ++impl_->rejected;
+        errno = err;
+        return -1;
+    }
 
     // Producer-stamped fields (the caller owns shape/dtype/offset/size).
     desc->seqno = ++impl_->seqno;
     desc->pool_generation = impl_->pool->generation();
     desc->bo_handle = static_cast<BoHandle>(d.buffer_index >= 0 ? d.buffer_index : 0);
     desc->producer_publish_ts_ns = rt_now_ns();
-
-    // Reject a descriptor whose [offset, size) or row_pitch would read/write
-    // outside the buffer — drop the frame rather than publish a corrupt view.
-    if (!detail::descriptor_is_valid(*desc, impl_->buffer_size)) return;
 
     // Deliver an explicit fence FD before publishing the metadata that references
     // it, so a consumer that reads the new seqno can already find the fence.
@@ -170,7 +181,10 @@ void TensorPublisher::publish(AcquiredDescriptor&& d, int sync_fd) {
     // the pool generation moved, so the steady state copies nothing.
     impl_->cache_pool(false);
     impl_->server->accept_and_handshake(0);
+    return 0;
 }
+
+std::uint64_t TensorPublisher::rejected_count() const noexcept { return impl_->rejected; }
 
 int TensorPublisher::reannounce_pool() {
     impl_->map_views();  // FDs changed after a retire/reallocate

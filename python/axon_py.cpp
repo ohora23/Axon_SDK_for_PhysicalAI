@@ -9,6 +9,7 @@
 // Build: -DAXON_BUILD_PYTHON=ON  (import name: `axon`).
 
 #include <cstdint>
+#include <cerrno>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -25,6 +26,14 @@
 #include "axon/types.h"
 
 namespace py = pybind11;
+
+namespace {
+// publish() returns -1 with errno set when it rejects a descriptor; surface it.
+[[noreturn]] void throw_publish_error(int err) {
+    if (err == EMSGSIZE) throw py::value_error("frame does not fit in the pool buffer (EMSGSIZE)");
+    throw py::value_error(std::string("descriptor rejected by publish(): ") + std::strerror(err));
+}
+}  // namespace
 using namespace axon;
 
 namespace {
@@ -209,8 +218,9 @@ PYBIND11_MODULE(axon, m) {
                 // ndarray is contiguous, but guard anyway.
                 std::memcpy(a.host_view, info.ptr, nbytes);
 
-                a.desc->rank = static_cast<std::uint8_t>(
-                    info.ndim > kMaxRank ? kMaxRank : info.ndim);
+                if (info.ndim < 1 || info.ndim > kMaxRank)
+                    throw py::value_error("array rank must be 1.." + std::to_string(kMaxRank));
+                a.desc->rank = static_cast<std::uint8_t>(info.ndim);
                 for (std::uint8_t i = 0; i < a.desc->rank; ++i)
                     a.desc->shape[i] = static_cast<std::uint32_t>(info.shape[i]);
                 a.desc->dtype = dtype;
@@ -218,7 +228,7 @@ PYBIND11_MODULE(axon, m) {
                 a.desc->size = nbytes;
                 a.desc->sync_fence_kind = SyncFenceKind::None;
 
-                pub.publish(std::move(a));
+                if (pub.publish(std::move(a)) != 0) throw_publish_error(errno);
             },
             py::arg("array"), py::arg("dtype") = DType::U8,
             "Publish a NumPy array as the next frame.")
@@ -232,9 +242,10 @@ PYBIND11_MODULE(axon, m) {
                std::vector<std::uint32_t> shape, DType dtype) {
                 if (a.buffer_index < 0)
                     throw std::runtime_error("no writable pool buffer available");
+                if (shape.empty() || shape.size() > kMaxRank)
+                    throw py::value_error("shape rank must be 1.." + std::to_string(kMaxRank));
                 std::uint64_t count = 1;
-                a.desc->rank = static_cast<std::uint8_t>(
-                    shape.size() > kMaxRank ? kMaxRank : shape.size());
+                a.desc->rank = static_cast<std::uint8_t>(shape.size());
                 for (std::uint8_t i = 0; i < a.desc->rank; ++i) {
                     a.desc->shape[i] = shape[i];
                     count *= shape[i];
@@ -243,7 +254,7 @@ PYBIND11_MODULE(axon, m) {
                 a.desc->offset = 0;
                 a.desc->size = count * dtype_size(dtype);
                 a.desc->sync_fence_kind = SyncFenceKind::None;
-                pub.publish(std::move(a));
+                if (pub.publish(std::move(a)) != 0) throw_publish_error(errno);
             },
             py::arg("acquired"), py::arg("shape"), py::arg("dtype"),
             "Publish a device frame already written into "

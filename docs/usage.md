@@ -57,9 +57,15 @@ for (std::uint64_t seq = 0; running; ++seq) {
     a.desc->offset = 0;
     a.desc->size = 640 * 480 * 2;
 
-    pub->publish(std::move(a));            // publishes the descriptor only
+    if (pub->publish(std::move(a)) != 0)   // publishes the descriptor only
+        perror("publish");                 // EMSGSIZE: size/offset past the buffer; EINVAL: bad field
 }
 ```
+
+`publish()` refuses a descriptor it cannot publish safely and says so: it
+returns -1 with `errno = EMSGSIZE` when `[offset, offset + size)` does not fit
+in the pool buffer, `EINVAL` for another malformed field. Nothing is published
+and no seqno is spent, so consumers see no gap; `rejected_count()` counts these.
 
 **Consumer**: attach to the same service name, then read the latest frame.
 `latest_view()` never blocks and never copies the payload.
@@ -120,6 +126,33 @@ while (rt_tick()) {               // your 1 kHz tick
 `staleness_ns` is the measured age of the frame you just read — the quantity
 the [7-term bound](../DesignFiles/detailed_design_doc.md#5-bounded-staleness-formula)
 caps. It's yours to use directly in safety logic.
+
+### Event-driven consumer (wake on publish)
+
+A fixed-rate loop makes a frame wait for the next tick: half a period on
+average (~0.5 ms at 1 kHz). A non-RT consumer that should react to each frame
+— perception, logging, a recorder — can block until something is published:
+
+```cpp
+std::vector<TensorSubscriber*> subs = {cam_front.get(), cam_left.get(), lidar.get()};
+for (;;) {
+    int i = TensorSubscriber::wait_any(subs.data(), subs.size(), /*timeout_ms=*/100);
+    if (i < 0) continue;                      // timeout (errno == ETIMEDOUT) or error
+    for (auto* s : subs)                      // take every stream that changed
+        if (auto v = s->latest_view(8)) handle(*v);
+}
+// one stream: sub->wait_for_update(timeout_ms) -> 1 update, 0 timeout, -1 error
+```
+
+The wait sleeps on a futex in the metadata slot (`futex_waitv` for several
+streams, Linux ≥ 5.16), so it costs no CPU while idle. `latest_view()` re-arms
+it: a wait returns at once if a frame arrived since this subscriber's last
+`latest_view()`. The publisher only makes a `FUTEX_WAKE` syscall while someone
+is waiting, so `publish()` stays syscall-free for RT producers with no
+event-driven consumer. On older kernels (Jetson L4T r35 is 5.10), with more
+than 128 streams, or on the Iceoryx2 backend it falls back to polling every
+100 µs. Keep `wait_any` out of the RT loop itself: the RT loop stays on
+`latest_view()` at its own rate.
 
 ---
 

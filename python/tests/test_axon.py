@@ -89,6 +89,21 @@ def run_producer(child_pid: int) -> int:
     return os.waitstatus_to_exitcode(status)
 
 
+def check_publish_rejects() -> None:
+    """publish() raises instead of silently dropping or truncating a frame."""
+    pool = axon.TensorPool.create(n_buffers=2, buffer_size=4096)
+    pub = axon.TensorPublisher.create("pytest/reject", pool)
+    for bad, why in ((np.zeros(8192, np.uint8), "larger than the buffer"),
+                     (np.zeros((1,) * 9, np.uint8), "rank above the maximum")):
+        try:
+            pub.publish(bad, axon.DType.U8)
+        except (ValueError, RuntimeError):
+            continue
+        raise AssertionError(f"publish() accepted an array {why}")
+    pub.publish(np.zeros(16, np.uint8), axon.DType.U8)  # a valid frame still goes through
+    del pub, pool
+
+
 def main() -> int:
     # Basic smoke of the module surface before the fork.
     assert axon.rt_now_ns() > 0
@@ -96,6 +111,7 @@ def main() -> int:
     assert pool.generation() == 1
     assert pool.buffer_count() == 4
     del pool
+    check_publish_rejects()
 
     pid = os.fork()
     if pid == 0:

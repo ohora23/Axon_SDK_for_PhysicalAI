@@ -22,7 +22,10 @@ struct AcquiredDescriptor {
 class TensorPublisher {
 public:
     // service_name is the Iceoryx2 service identifier; consumers attach using
-    // the same name.
+    // the same name. Returns nullptr (errno set) on failure; errno = E2BIG when
+    // the pool's backend import parameters exceed what one sidecar handshake can
+    // carry (65535 bytes, i.e. ~126 NvBufSurface buffers), which would otherwise
+    // leave consumers without a device view.
     static std::unique_ptr<TensorPublisher> create(
         std::string_view service_name,
         TensorPool& pool);
@@ -42,7 +45,17 @@ public:
     // Publish metadata — writes into the Iceoryx2 SHM queue and stamps
     // producer_publish_ts_ns. When sync_fence_kind == SyncFileViaSidecar and
     // sync_fd is valid, the fence FD is delivered through the sidecar.
-    void publish(AcquiredDescriptor&& d, int sync_fd = -1);
+    //
+    // Returns 0, or -1 when the descriptor is rejected and nothing is published:
+    // errno = EMSGSIZE if [offset, offset + size) does not fit in the pool buffer,
+    // EINVAL for another malformed field (rank 0 or > kMaxRank, unknown dtype,
+    // size 0, row_pitch smaller than a packed row or not covered by size). A
+    // rejected frame takes no seqno, so consumers see no gap; rejected_count()
+    // counts them.
+    int publish(AcquiredDescriptor&& d, int sync_fd = -1);
+
+    // Frames publish() rejected so far — for monitoring.
+    std::uint64_t rejected_count() const noexcept;
 
     // Re-issue the bulk handshake to every subscriber after a pool
     // reallocation. pool_generation increments automatically.

@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -41,6 +42,15 @@ public:
                              int* retries_out) noexcept = 0;
 
     virtual bool has_data() const noexcept = 0;
+
+    // Update notification (TensorSubscriber::wait_any). notify_word() is a 32-bit
+    // counter in shared memory that the publisher bumps after every publish, usable as
+    // a process-shared futex; waiters_word() is a flag a consumer sets before sleeping on
+    // it, so the publisher only pays a FUTEX_WAKE syscall when someone may be asleep.
+    // nullptr when the backend or the publisher's slot has no such word (Iceoryx2, or a
+    // publisher built before these fields): wait_any then polls.
+    virtual std::atomic<std::uint32_t>* notify_word() noexcept { return nullptr; }
+    virtual std::atomic<std::uint32_t>* waiters_word() noexcept { return nullptr; }
 
     // Factories — pick the compiled/enabled backend.
     static MetadataChannel* create_publisher(const std::string& service_name);

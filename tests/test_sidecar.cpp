@@ -153,7 +153,7 @@ AXON_TEST(ext_blob_roundtrip) {
 
     auto* server = SidecarServer::create("sidecar/test_ext");
     REQUIRE(server != nullptr);
-    server->set_pool({}, 1, 0, axon::kWireVersion, 0, ext.data(), ext.size());
+    CHECK(server->set_pool({}, 1, 0, axon::kWireVersion, 0, ext.data(), ext.size()));
 
     auto* client = SidecarClient::create("sidecar/test_ext");
     REQUIRE(client != nullptr);
@@ -215,6 +215,17 @@ AXON_TEST(reconnect_does_not_leak_socket) {
     for (int i = 0; i < 5; ++i) CHECK(client->connect(2000) == 0);
     CHECK(open_fd_count() == before);   // each reconnect closes the previous socket
     delete client;
+    delete server;
+}
+
+// A blob larger than the 16-bit ext_len can carry is refused, not silently dropped.
+AXON_TEST(oversized_ext_blob_is_refused) {
+    std::vector<std::uint8_t> ext(axon::detail::kMaxHandshakeExt + 1, 0xab);
+    auto* server = SidecarServer::create("sidecar/test_ext_big");
+    REQUIRE(server != nullptr);
+    CHECK(!server->set_pool({}, 1, 0, axon::kWireVersion, 0, ext.data(), ext.size()));
+    CHECK(server->set_pool({}, 1, 0, axon::kWireVersion, 0, ext.data(), axon::detail::kMaxHandshakeExt));
+    CHECK(server->set_pool({}, 1, 0, axon::kWireVersion, 0, nullptr, 0));
     delete server;
 }
 

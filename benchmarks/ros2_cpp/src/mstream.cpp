@@ -35,6 +35,7 @@
 #include "axon/publisher.h"
 #include "axon/rt.h"
 #include "axon/subscriber.h"
+#include "fastdds_check.h"
 
 using namespace axon;
 
@@ -197,6 +198,7 @@ void wait_for_subscribers(const std::function<bool()>& all_matched) {
 }
 
 int pub_ros_dyn(int scale, const std::vector<Stream>& streams, int seconds) {
+    for (const Stream& st : streams) axon_bench::require_fits_shm_segment(st.bytes, st.name.c_str());
     auto node = rclcpp::Node::make_shared("mstream_pub");
     std::vector<rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr> pubs;
     std::vector<std_msgs::msg::UInt8MultiArray> msgs(streams.size());
@@ -271,7 +273,7 @@ int pub_ros_loan(int scale, const std::vector<Stream>& streams, int seconds) {
     });
 }
 
-int pub_axon(int scale, const std::vector<Stream>& streams, int seconds) {
+int pub_axon(int scale, const std::vector<Stream>& streams, int seconds, const char* transport) {
     std::vector<std::unique_ptr<TensorPool>> pools;
     std::vector<std::unique_ptr<TensorPublisher>> pubs;
     std::vector<std::vector<std::uint8_t>> src(streams.size());
@@ -285,7 +287,7 @@ int pub_axon(int scale, const std::vector<Stream>& streams, int seconds) {
         src[i].resize(streams[i].bytes);
         for (std::size_t j = 0; j < src[i].size(); ++j) src[i][j] = static_cast<std::uint8_t>(j * 31);
     }
-    return run_producer("axon", scale, streams, seconds, [&](std::size_t i, std::uint64_t t0, std::uint64_t s) {
+    return run_producer(transport, scale, streams, seconds, [&](std::size_t i, std::uint64_t t0, std::uint64_t s) {
         AcquiredDescriptor a = pubs[i]->acquire_descriptor();
         auto* p = static_cast<std::uint8_t*>(a.host_view);
         std::memcpy(p, src[i].data(), streams[i].bytes);
@@ -376,6 +378,7 @@ void spin_until_done(const rclcpp::Node::SharedPtr& node, const Tally& t) {
 }
 
 int sub_ros_dyn(int scale, const std::vector<Stream>& streams, int seconds) {
+    for (const Stream& st : streams) axon_bench::require_fits_shm_segment(st.bytes, st.name.c_str());
     auto node = rclcpp::Node::make_shared("mstream_sub_ros_dyn");
     Tally t(streams, seconds);
     std::vector<rclcpp::SubscriptionBase::SharedPtr> subs;
@@ -419,7 +422,9 @@ int sub_ros_loan(int scale, const std::vector<Stream>& streams, int seconds) {
     return t.report("ros_loan", scale, seconds);
 }
 
-int sub_axon(int scale, const std::vector<Stream>& streams, int seconds) {
+// event == false: axon's RT model, a 1 kHz loop reading the latest of every stream.
+// event == true:  block in TensorSubscriber::wait_any until some stream publishes.
+int sub_axon(int scale, const std::vector<Stream>& streams, int seconds, bool event) {
     std::vector<std::unique_ptr<TensorSubscriber>> subs;
     for (const Stream& s : streams) {
         subs.push_back(TensorSubscriber::create("ms/" + s.name));
@@ -428,43 +433,48 @@ int sub_axon(int scale, const std::vector<Stream>& streams, int seconds) {
             return 11;
         }
     }
+    std::vector<TensorSubscriber*> ptrs;
+    for (auto& s : subs) ptrs.push_back(s.get());
     Tally t(streams, seconds);
-    // axon's usage model: a 1 kHz loop reads the latest of every stream each tick.
     std::uint64_t tick = rt_now_ns();
     const std::uint64_t give_up = tick + 20000000000ull;
     while (!t.done() && (t.open() || rt_now_ns() < give_up)) {
-        for (std::size_t i = 0; i < streams.size(); ++i) {
+        if (event && TensorSubscriber::wait_any(ptrs.data(), ptrs.size(), 50) < 0) continue;  // 50 ms: re-check done()
+        for (std::size_t i = 0; i < streams.size(); ++i) {  // take every stream that changed
             auto v = subs[i]->latest_view(8);
             if (v && v->data && v->seqno > t.last_seq[i])
                 t.frame(i, static_cast<const std::uint8_t*>(v->data), streams[i].bytes);
         }
-        tick += 1000000;
-        sleep_until_ns(tick);
+        if (!event) {
+            tick += 1000000;
+            sleep_until_ns(tick);
+        }
     }
-    return t.report("axon", scale, seconds);
+    return t.report(event ? "axon_wait" : "axon", scale, seconds);
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc != 5) {
-        std::fprintf(stderr, "usage: mstream <pub|sub> <ros_dyn|ros_loan|axon> <scale> <seconds>\n");
+        std::fprintf(stderr, "usage: mstream <pub|sub> <ros_dyn|ros_loan|axon|axon_wait> <scale> <seconds>\n");
         return 1;
     }
     const std::string role = argv[1], tr = argv[2];
     const int scale = std::max(1, std::atoi(argv[3])), seconds = std::max(1, std::atoi(argv[4]));
     const auto streams = make_streams(scale);
-    const bool ros = tr != "axon";
+    const bool ros = tr != "axon" && tr != "axon_wait";
     if (ros) rclcpp::init(0, nullptr);
     int rc = 1;
     if (role == "pub")
         rc = tr == "ros_dyn" ? pub_ros_dyn(scale, streams, seconds)
            : tr == "ros_loan" ? pub_ros_loan(scale, streams, seconds)
-           : tr == "axon" ? pub_axon(scale, streams, seconds) : 1;
+           : (tr == "axon" || tr == "axon_wait") ? pub_axon(scale, streams, seconds, tr.c_str()) : 1;
     else if (role == "sub")
         rc = tr == "ros_dyn" ? sub_ros_dyn(scale, streams, seconds)
            : tr == "ros_loan" ? sub_ros_loan(scale, streams, seconds)
-           : tr == "axon" ? sub_axon(scale, streams, seconds) : 1;
+           : tr == "axon" ? sub_axon(scale, streams, seconds, false)
+           : tr == "axon_wait" ? sub_axon(scale, streams, seconds, true) : 1;
     if (ros) rclcpp::shutdown();
     return rc;
 }

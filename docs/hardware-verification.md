@@ -137,7 +137,12 @@ Measured (scale 2 ≈ 148 MB/s, 4 s):
 | instructions | 4.9 B | 24.8 B | 5.1× |
 | context-switches | 6,931 | 10,427 | 1.5× |
 
-ROS2 serializes+copies every payload (both sides), spending ~8.6× the cache-misses and
+These are rclpy (Python) numbers. In C++ against ROS 2's zero-copy path (loaned messages + Fast DDS data-sharing), the same
+workload at 297 MB/s, counted over the measured window, gives 0.88 M vs 4.38 M cache-misses per second (5×) and 0.023 B vs
+0.123 B instructions per second (5.3×); see
+[`benchmarks/ros2_cpp`](../benchmarks/ros2_cpp/README.md#multi-stream-cpu-delivery-and-cache-misses).
+
+ROS2 (rclpy) serializes+copies every payload (both sides), spending ~8.6× the cache-misses and
 ~5× the instructions axon uses to move the same data — the memory-side companion to the
 CPU result in [`benchmarks/mock`](../benchmarks/mock/README.md) (axon flat vs ROS2 3.3×
 CPU at scale 4).

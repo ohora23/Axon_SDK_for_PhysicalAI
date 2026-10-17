@@ -20,6 +20,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   msg/Payload147K.msg
   msg/Payload1M.msg
   msg/Payload4M.msg
+  msg/Payload614400.msg
+  msg/Payload8640.msg
+  msg/Payload64.msg
+  msg/Payload48.msg
 )
 
 # --- Benchmark executable ---
@@ -42,8 +46,24 @@ rosidl_get_typesupport_target(cpp_typesupport_target "${PROJECT_NAME}" "rosidl_t
 
 target_link_libraries(bench ${cpp_typesupport_target} ${AXON_LIB} CUDA::cuda_driver rt pthread)
 
+# --- Multi-stream benchmark executable (host only, no CUDA) ---
+add_executable(mstream src/mstream.cpp)
+
+target_include_directories(mstream PRIVATE
+  ${AXON_ROOT}/include
+)
+
+target_compile_features(mstream PRIVATE cxx_std_20)
+
+ament_target_dependencies(mstream
+  rclcpp
+  std_msgs
+)
+
+target_link_libraries(mstream ${cpp_typesupport_target} ${AXON_LIB} CUDA::cuda_driver rt pthread)
+
 # Install
-install(TARGETS bench
+install(TARGETS bench mstream
   DESTINATION lib/${PROJECT_NAME}
 )
 

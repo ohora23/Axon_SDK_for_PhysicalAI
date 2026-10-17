@@ -8,7 +8,8 @@ set(AXON_TESTS
     test_sidecar
     test_seqlock
     test_pool
-    test_end_to_end)
+    test_end_to_end
+    test_wait)
 
 foreach(t ${AXON_TESTS})
     add_executable(${t} ${t}.cpp)
@@ -20,6 +21,7 @@ endforeach()
 # The concurrency and e2e tests spawn threads / child processes; give them room.
 set_tests_properties(test_seqlock     PROPERTIES TIMEOUT 60)
 set_tests_properties(test_end_to_end  PROPERTIES TIMEOUT 60)
+set_tests_properties(test_wait        PROPERTIES TIMEOUT 60)
 
 # A-2 cross-process GPU zero-copy e2e. Needs the CUDA VMM backend (built with
 # AXON_WITH_CUDA) and a real device, so register with ctest only under the

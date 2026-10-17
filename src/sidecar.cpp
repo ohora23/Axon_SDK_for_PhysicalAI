@@ -230,7 +230,7 @@ SidecarServer* SidecarServer::create(const std::string& service_name) {
     return s;
 }
 
-void SidecarServer::set_pool(const std::vector<int>& fds,
+bool SidecarServer::set_pool(const std::vector<int>& fds,
                               std::uint32_t pool_generation,
                               std::uint64_t buffer_size,
                               std::uint32_t wire_version,
@@ -245,13 +245,14 @@ void SidecarServer::set_pool(const std::vector<int>& fds,
     impl_->header.pool_generation = pool_generation;
     impl_->header.n_buffers = static_cast<std::uint32_t>(fds.size());
     impl_->header.buffer_size = buffer_size;
-    if (ext_len > 0 && ext_len <= 65535 && ext) {
+    if (ext_len > 0 && ext_len <= kMaxHandshakeExt && ext) {
         impl_->ext.assign(static_cast<const std::uint8_t*>(ext),
                           static_cast<const std::uint8_t*>(ext) + ext_len);
-    } else {
-        impl_->ext.clear();
-        impl_->header.ext_len = 0;
+        return true;
     }
+    impl_->ext.clear();
+    impl_->header.ext_len = 0;
+    return ext_len == 0;  // false: a blob was given but cannot be carried
 }
 
 int SidecarServer::accept_and_handshake(int timeout_ms) {

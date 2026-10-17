@@ -19,6 +19,9 @@
 
 namespace axon::detail {
 
+// Largest backend import blob one pool handshake can carry (PoolHandshakeHeader::ext_len).
+constexpr std::size_t kMaxHandshakeExt = 65535;
+
 // Maximum FDs deliverable in a single SCM_RIGHTS message. Matches the spike PoC
 // control-buffer sizing and bounds the pool ring.
 constexpr int kMaxSidecarFds = 32;
@@ -81,9 +84,10 @@ public:
     ~SidecarServer();
 
     // Cache the current pool bundle. Does not transmit on its own.
-    // `ext` / `ext_len` — backend-specific import blob streamed after the header;
-    // rejected (cached as null) if ext_len > 65535.
-    void set_pool(const std::vector<int>& fds, std::uint32_t pool_generation,
+    // `ext` / `ext_len` — backend-specific import blob streamed after the header.
+    // Must be <= kMaxHandshakeExt (the header's ext_len is 16-bit): returns false
+    // and caches no blob otherwise. TensorPublisher::create() refuses such a pool.
+    bool set_pool(const std::vector<int>& fds, std::uint32_t pool_generation,
                   std::uint64_t buffer_size, std::uint32_t wire_version,
                   std::uint8_t backend,
                   const void* ext = nullptr, std::size_t ext_len = 0);

@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -72,6 +73,21 @@ public:
     //   - When a descriptor requires a fence not yet drained, the frame is
     //     skipped (fallback) rather than handed out possibly-torn.
     std::optional<TensorView> latest_view(int max_retry = 8) noexcept;
+
+    // Non-RT: block until a frame newer than the one this subscriber last read with
+    // latest_view() is published, or until timeout_ms passes (-1 = no timeout).
+    // Returns 1 when there is an update, 0 on timeout, -1 on error (errno set).
+    // Costs no CPU while waiting; the publisher pays one FUTEX_WAKE per publish only
+    // while someone waits. Call latest_view() afterwards to take the frame (and so
+    // re-arm the wait). A subscriber is single-threaded: wait on it and call
+    // latest_view() on it from the same thread.
+    int wait_for_update(int timeout_ms = -1) noexcept;
+
+    // Non-RT: the same over several subscribers (e.g. one per sensor stream). Returns
+    // the index of a subscriber with an update, -1 on timeout (errno = ETIMEDOUT) or
+    // error. Uses futex_waitv (Linux >= 5.16); on older kernels, more than 128
+    // subscribers or the Iceoryx2 backend it polls every 100 µs instead.
+    static int wait_any(TensorSubscriber* const* subs, std::size_t n, int timeout_ms = -1) noexcept;
 
     void set_fallback_policy(FallbackPolicy p) noexcept;
 

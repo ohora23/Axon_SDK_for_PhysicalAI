@@ -2,8 +2,8 @@
 
 > **Python on both sides (rclpy vs the axon bindings).** Most of the CPU gap below is Python. The same
 > workload in C++, against rclcpp `UInt8MultiArray` and ROS 2's zero-copy path, is in
-> [`../ros2_cpp/`](../ros2_cpp/README.md#multi-stream-cpu-delivery-and-cache-misses): at 297 MB/s axon 0.014 cores,
-> ROS 2 zero-copy 0.053, rclcpp `UInt8MultiArray` 0.093.
+> [`../ros2_cpp/`](../ros2_cpp/README.md#multi-stream-cpu-latency-delivery-and-cache-misses): at 297 MB/s axon 0.015-0.019 cores,
+> ROS 2 zero-copy 0.038, rclcpp `UInt8MultiArray` 0.077.
 
 Where `benchmarks/` (one stream) measures raw per-message latency, **MockSystem**
 models the *concurrent sensor traffic of a real serving/mobile robot* and watches

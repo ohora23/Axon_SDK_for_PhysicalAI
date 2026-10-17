@@ -9,11 +9,16 @@
 #include "axon/subscriber.h"
 
 #include <array>
+#include <cerrno>
+#include <climits>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <vector>
 
+#include <linux/futex.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include "axon/detail/accelerator.h"
@@ -56,6 +61,10 @@ struct TensorSubscriber::Impl {
 
     std::uint64_t handshake_count = 0;
     std::uint64_t fallback_count = 0;
+
+    // wait_for_update / wait_any: what this subscriber has already seen.
+    std::uint32_t seen_notify = 0;  // notify_word() value at the last latest_view()
+    std::uint64_t seen_seqno = 0;   // seqno of the last latest_view() (polling fallback)
 
     // ---- Sync-fence cache (R2, option B) ----
     // drain_fences() (non-RT) fills this ring off the sidecar socket; latest_view()
@@ -236,6 +245,13 @@ std::optional<TensorView> TensorSubscriber::latest_view(int max_retry) noexcept 
     Impl& s = *impl_;
     if (!s.meta) return std::nullopt;
 
+    // Read notify BEFORE the descriptor: a publish landing after this load makes the
+    // next wait return at once, so no update can slip between a read and a wait. It is
+    // committed to seen_notify only when a fresh frame is handed out below, so a frame
+    // skipped now (fence not drained yet, generation mismatch) still wakes the next wait.
+    auto* notify = s.meta->notify_word();
+    const std::uint32_t notify_now = notify ? notify->load(std::memory_order_acquire) : 0;
+
     TensorDescriptor desc;
     int retries = 0;
     bool ok = s.meta->read_latest(&desc, max_retry, &retries);
@@ -293,6 +309,8 @@ std::optional<TensorView> TensorSubscriber::latest_view(int max_retry) noexcept 
             s.last_good.sync_fd = -1;  // the stored copy owns no fence (already synced)
             s.last_good_publish_ts_ns = desc.producer_publish_ts_ns;
             s.have_last_good = true;
+            s.seen_notify = notify_now;
+            s.seen_seqno = desc.seqno;
             return v;
         }
     }
@@ -328,6 +346,106 @@ std::uint64_t TensorSubscriber::pool_handshake_count() const noexcept {
 
 std::uint64_t TensorSubscriber::fallback_invocation_count() const noexcept {
     return impl_->fallback_count;
+}
+
+// ---------------------------------------------------------------- wait
+
+namespace {
+
+// True if subscriber `s` has a frame newer than its last latest_view().
+bool has_update(detail::MetadataChannel* meta, std::uint32_t seen_notify, std::uint64_t seen_seqno) {
+    if (auto* w = meta->notify_word()) return w->load(std::memory_order_seq_cst) != seen_notify;
+    TensorDescriptor d;
+    int r = 0;
+    return meta->read_latest(&d, 8, &r) && d.seqno != seen_seqno;
+}
+
+timespec deadline_after(int timeout_ms) {
+    timespec t {};
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    t.tv_sec += timeout_ms / 1000;
+    t.tv_nsec += static_cast<long>(timeout_ms % 1000) * 1000000L;
+    if (t.tv_nsec >= 1000000000L) { t.tv_sec += 1; t.tv_nsec -= 1000000000L; }
+    return t;
+}
+
+bool past(const timespec& d) {
+    timespec now {};
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return now.tv_sec > d.tv_sec || (now.tv_sec == d.tv_sec && now.tv_nsec >= d.tv_nsec);
+}
+
+}  // namespace
+
+int TensorSubscriber::wait_for_update(int timeout_ms) noexcept {
+    TensorSubscriber* self = this;
+    int r = wait_any(&self, 1, timeout_ms);
+    if (r == 0) return 1;
+    return errno == ETIMEDOUT ? 0 : -1;
+}
+
+// futex_waitv needs linux-libc-dev >= 5.16 (struct futex_waitv, SYS_futex_waitv). With
+// older headers (JetPack 5 ships 5.4) only the polling path is built.
+#if defined(SYS_futex_waitv) && defined(FUTEX_WAITV_MAX)
+#define AXON_HAVE_FUTEX_WAITV 1
+constexpr std::size_t kMaxWaitv = FUTEX_WAITV_MAX;
+#else
+#define AXON_HAVE_FUTEX_WAITV 0
+constexpr std::size_t kMaxWaitv = 0;
+#endif
+
+int TensorSubscriber::wait_any(TensorSubscriber* const* subs, std::size_t n, int timeout_ms) noexcept {
+    if (n == 0 || subs == nullptr) { errno = EINVAL; return -1; }
+    for (std::size_t i = 0; i < n; ++i)
+        if (!subs[i] || !subs[i]->impl_->meta) { errno = EINVAL; return -1; }
+
+    const timespec deadline = deadline_after(timeout_ms < 0 ? 0 : timeout_ms);
+    bool futexes = n <= kMaxWaitv;
+    for (std::size_t i = 0; i < n && futexes; ++i)
+        futexes = subs[i]->impl_->meta->notify_word() != nullptr;
+
+    int result = -1;
+    int err = ETIMEDOUT;
+#if AXON_HAVE_FUTEX_WAITV
+    futex_waitv w[FUTEX_WAITV_MAX];
+#endif
+    for (;;) {
+        // Raise the waiter flag before checking (see SeqlockMetadataChannel::publish):
+        // a publish after the check below then either is seen by it or wakes us.
+        if (futexes)
+            for (std::size_t i = 0; i < n; ++i)
+                subs[i]->impl_->meta->waiters_word()->store(1, std::memory_order_seq_cst);
+
+        for (std::size_t i = 0; i < n; ++i) {
+            const Impl& s = *subs[i]->impl_;
+            if (has_update(s.meta, s.seen_notify, s.seen_seqno)) { result = static_cast<int>(i); break; }
+        }
+        if (result >= 0) break;
+        if (timeout_ms >= 0 && past(deadline)) break;
+
+#if AXON_HAVE_FUTEX_WAITV
+        if (futexes) {
+            for (std::size_t i = 0; i < n; ++i) {
+                w[i] = futex_waitv {};
+                w[i].val = subs[i]->impl_->seen_notify;
+                w[i].uaddr = reinterpret_cast<std::uintptr_t>(subs[i]->impl_->meta->notify_word());
+                w[i].flags = FUTEX2_SIZE_U32;  // process-shared: no FUTEX_PRIVATE_FLAG
+            }
+            long rc = ::syscall(SYS_futex_waitv, w, static_cast<unsigned>(n), 0,
+                                timeout_ms < 0 ? nullptr : &deadline, CLOCK_MONOTONIC);
+            if (rc >= 0 || errno == EAGAIN || errno == EINTR) continue;  // woken or value moved: recheck
+            if (errno == ETIMEDOUT) continue;                             // loop ends on past(deadline)
+            if (errno == ENOSYS) { futexes = false; continue; }          // kernel < 5.16: poll
+            err = errno;
+            break;
+        }
+#endif
+        timespec step {0, 100000};  // ponytail: 100 µs poll fallback (old kernels, iceoryx2)
+        nanosleep(&step, nullptr);
+    }
+
+    if (result < 0) errno = err;
+    return result;
 }
 
 }  // namespace axon

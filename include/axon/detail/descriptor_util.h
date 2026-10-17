@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <cerrno>
+
 #include "axon/tensor_descriptor.h"
 #include "axon/types.h"
 
@@ -48,20 +50,28 @@ inline std::uint64_t image_bytes(const TensorDescriptor& d) noexcept {
 // Structural validity: rank/dtype sane, [offset, offset+size) fits the buffer,
 // row_pitch (if set) is at least a packed row, and size covers the pitched
 // footprint. Does not touch any FD.
-inline bool descriptor_is_valid(const TensorDescriptor& d,
-                                std::uint64_t buffer_size) noexcept {
-    if (d.rank == 0 || d.rank > kMaxRank) return false;
-    if (dtype_size(d.dtype) == 0) return false;
-    if (d.size == 0) return false;
-    if (d.offset > buffer_size) return false;
-    if (d.size > buffer_size - d.offset) return false;
+// 0 if the descriptor is publishable against a buffer of `buffer_size` bytes;
+// EMSGSIZE if [offset, offset + size) does not fit in the buffer; EINVAL for any
+// other malformed field (rank, dtype, empty size, row_pitch).
+inline int descriptor_error(const TensorDescriptor& d,
+                            std::uint64_t buffer_size) noexcept {
+    if (d.rank == 0 || d.rank > kMaxRank) return EINVAL;
+    if (dtype_size(d.dtype) == 0) return EINVAL;
+    if (d.size == 0) return EINVAL;
+    if (d.offset > buffer_size) return EMSGSIZE;
+    if (d.size > buffer_size - d.offset) return EMSGSIZE;
     if (d.row_pitch != 0 && d.rank >= 1) {
         std::uint64_t packed_row =
             static_cast<std::uint64_t>(d.shape[d.rank - 1]) * dtype_size(d.dtype);
-        if (d.row_pitch < packed_row) return false;      // pitch can't be < packed
-        if (image_bytes(d) > d.size) return false;        // size must cover padding
+        if (d.row_pitch < packed_row) return EINVAL;      // pitch can't be < packed
+        if (image_bytes(d) > d.size) return EINVAL;        // size must cover padding
     }
-    return true;
+    return 0;
+}
+
+inline bool descriptor_is_valid(const TensorDescriptor& d,
+                                std::uint64_t buffer_size) noexcept {
+    return descriptor_error(d, buffer_size) == 0;
 }
 
 }  // namespace axon::detail

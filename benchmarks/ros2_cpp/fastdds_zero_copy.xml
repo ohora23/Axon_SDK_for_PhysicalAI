@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fast DDS profile for both ROS 2 cells (ros_dyn and ros_loan), per the Fast DDS
+     "ROS 2 zero copy" guide: synchronous publishing, data-sharing where the type allows it
+     (only the fixed-size Payload* types do), preallocated history. With
+     RMW_FASTRTPS_USE_QOS_FROM_XML=1 the XML QoS applies, so the QoS the code asks for
+     (keep-last 1, best-effort, volatile) is spelled out here too. -->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <data_writer profile_name="default publisher profile" is_default_profile="true">
+    <topic>
+      <historyQos><kind>KEEP_LAST</kind><depth>1</depth></historyQos>
+    </topic>
+    <qos>
+      <reliability><kind>BEST_EFFORT</kind></reliability>
+      <durability><kind>VOLATILE</kind></durability>
+      <publishMode><kind>SYNCHRONOUS</kind></publishMode>
+      <data_sharing><kind>AUTOMATIC</kind></data_sharing>
+    </qos>
+    <historyMemoryPolicy>PREALLOCATED_WITH_REALLOC</historyMemoryPolicy>
+  </data_writer>
+  <data_reader profile_name="default subscription profile" is_default_profile="true">
+    <topic>
+      <historyQos><kind>KEEP_LAST</kind><depth>1</depth></historyQos>
+    </topic>
+    <qos>
+      <reliability><kind>BEST_EFFORT</kind></reliability>
+      <durability><kind>VOLATILE</kind></durability>
+      <data_sharing><kind>AUTOMATIC</kind></data_sharing>
+    </qos>
+    <historyMemoryPolicy>PREALLOCATED_WITH_REALLOC</historyMemoryPolicy>
+  </data_reader>
+</profiles>

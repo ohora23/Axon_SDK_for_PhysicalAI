@@ -1,5 +1,9 @@
 # axon vs ROS2 latency benchmark (design doc §8.2)
 
+> **Superseded for ROS 2 comparisons by [`ros2_cpp/`](ros2_cpp/README.md).** This harness is Python on both
+> sides (rclpy vs the axon bindings), so most of the gap below is Python. The C++ rerun compares rclcpp,
+> ROS 2 loaned messages + Fast DDS data-sharing, and axon, on the host and on the GPU.
+
 Quantifies the project's central thesis: ROS2's DDS path serializes and copies the
 **entire payload** on every frame, while axon sends only a fixed-size descriptor
 through its metadata queue and keeps the tensor in a shared dma-buf. So axon

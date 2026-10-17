@@ -1,0 +1,6 @@
+build/
+install/
+log/
+# per-run scratch; the committed raw data is results/rep*.jsonl
+results/*
+!results/rep*.jsonl

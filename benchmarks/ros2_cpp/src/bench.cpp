@@ -25,6 +25,7 @@
 #include "axon/publisher.h"
 #include "axon/subscriber.h"
 #include "axon/rt.h"
+#include "fastdds_check.h"
 
 #include <cuda.h>
 
@@ -129,6 +130,7 @@ static void print_sub_result(const char* transport, int bytes, int gpu, int fram
 
 // ============ ROS dynamic producer ============
 static int run_pub_ros_dyn(int bytes, int frames, int rate_hz, int gpu) {
+    axon_bench::require_fits_shm_segment(bytes, "the UInt8MultiArray payload");
     rclcpp::init(0, nullptr);
     auto node = rclcpp::Node::make_shared("bench_pub");
     auto pub = node->create_publisher<std_msgs::msg::UInt8MultiArray>(
@@ -184,6 +186,7 @@ static int run_pub_ros_dyn(int bytes, int frames, int rate_hz, int gpu) {
 
 // ============ ROS dynamic consumer ============
 static SubResult run_sub_ros_dyn(int bytes, int frames, int rate_hz, int gpu) {
+    axon_bench::require_fits_shm_segment(bytes, "the UInt8MultiArray payload");
     rclcpp::init(0, nullptr);
     auto node = rclcpp::Node::make_shared("bench_sub");
 

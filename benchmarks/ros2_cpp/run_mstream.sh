@@ -51,7 +51,7 @@ run() {  # run <role> <transport> <scale> -> results/ms_<transport>_<scale>_<rol
 }
 
 for scale in $SCALES; do
-    for transport in ros_dyn ros_loan axon; do
+    for transport in ros_dyn ros_loan axon axon_wait; do
         echo "[mstream] scale=$scale transport=$transport"
         run sub "$transport" "$scale" & SUB=$!
         sleep 1
@@ -70,7 +70,7 @@ import json, sys
 rows = {}
 for l in open(sys.argv[1]):
     o = json.loads(l); rows.setdefault((o["scale"], o["transport"]), {})[o["role"]] = o
-order = {"ros_dyn": 0, "ros_loan": 1, "axon": 2}
+order = {"ros_dyn": 0, "ros_loan": 1, "axon": 2, "axon_wait": 3}
 perf = any(r.get("pub", {}).get("cache_misses", -1) >= 0 for r in rows.values())
 print("| scale | offered MB/s | transport | cores (pub + sub) | delivery (worst stream) | torn | cam p50 / p99 µs |" + (" cache-misses | instructions |" if perf else ""))
 print("|---|---|---|---|---|---|---|" + ("---|---|" if perf else ""))

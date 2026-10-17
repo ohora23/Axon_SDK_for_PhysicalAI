@@ -55,9 +55,9 @@ flowchart LR
 
 | 항목 | 결과 |
 |---|---|
-| 프로세스 간 GPU → GPU, 4 MiB (ROS 2 loaned message + data-sharing 대비, C++) | 지연 **20× 낮음** (25 µs vs 489 µs) |
-| host → host, 1 MiB (같은 비교) | **2.3× 낮음** (15 µs vs 34 µs), 4 MiB에서는 1.3× |
-| 다중스트림 로봇 워크로드 @ 297 MB/s (같은 비교) | **CPU 약 4× 적음** (0.014 vs 0.053 cores), **캐시미스 5× 적음**, 모든 프레임 전달 |
+| 프로세스 간 GPU → GPU, 4 MiB (ROS 2 loaned message + data-sharing 대비, C++) | 지연 **19× 낮음** (26 µs vs 485 µs) |
+| host → host, 1 MiB (같은 비교) | **2.4× 낮음** (15 µs vs 36 µs), 4 MiB에서는 1.4× |
+| 다중스트림 로봇 워크로드 @ 297 MB/s (같은 비교, 이벤트 방식 소비자) | 카메라 p50 **29 vs 44 µs**, **CPU 절반** (0.019 vs 0.038 cores), 캐시미스 2.8× 적음, 모든 프레임 전달 |
 | RT 루프 page fault | **0 / frame** |
 | GPU 프로세스 간 공유 | **zero-copy**, 200/200 프레임, 1.68 GB |
 | VLM 인코더→LLM 핸드오프 (video 34 MB) | host 왕복 대비 **36× 빠름** |
@@ -143,10 +143,10 @@ flowchart LR
 
 | 지표 | 목표 | 실측 (axon vs ROS2) |
 |---|---|---|
-| ROS 2 zero-copy 경로 대비 지연 (C++, loaned message + data-sharing) | 낮게 | **host 1 MiB: 15 vs 34 µs (2.3×), GPU→GPU 4 MiB: 25 vs 489 µs (20×)** ✅ |
-| 297 MB/s에서 CPU (다중스트림, C++, ROS 2 zero-copy 대비) | 낮게 | **0.014 vs 0.053 cores — 약 4× 적음** (둘 다 0.1 core 미만) ✅ |
-| 부하 시 프레임 전달 (C++) | 드롭 없음 | **axon과 ROS 2 zero-copy 100 %, rclcpp `UInt8MultiArray`는 카메라 하나가 40~92 %** ✅ |
-| 메모리 비용 (같은 워크로드, C++, ROS 2 zero-copy 대비) | 페이로드 복사 0 | **캐시미스 5× 적음 (초당 0.88 M vs 4.38 M); 프레임당 전송 syscall ~0** ✅ |
+| ROS 2 zero-copy 경로 대비 지연 (C++, loaned message + data-sharing) | 낮게 | **host 1 MiB: 15 vs 36 µs (2.4×), GPU→GPU 4 MiB: 26 vs 485 µs (19×), 다중스트림 카메라 p50 29 vs 44 µs** ✅ |
+| 297 MB/s에서 CPU (다중스트림, C++, ROS 2 zero-copy 대비) | 낮게 | **이벤트 방식 0.019 vs 0.038 cores (1 kHz 루프는 0.015)**, 둘 다 0.1 core 미만 ✅ |
+| 부하 시 프레임 전달 (C++) | 드롭 없음 | **모든 전송에서 모든 카메라 스트림 100 %** (ROS 2는 프레임보다 큰 Fast DDS SHM 세그먼트가 필요하며, 벤치마크는 없으면 실행을 거부한다) ✅ |
+| 메모리 비용 (같은 워크로드, C++, ROS 2 zero-copy 대비) | 페이로드 복사 0 | **캐시미스 이벤트 방식 2.8×, 1 kHz 루프 4.2× 적음; 프레임당 전송 syscall ~0** ✅ |
 | RT 중 page fault | **0** | **0 / frame** (프레임 20배에도 평평) ✅ |
 | GPU zero-copy import | 실제 하드웨어 | **RTX 5080: 200/200 프레임, 복사 0, 1.68 GB** ✅ |
 | 센서 → 가속기, 복사 없음 | 실제 보드 + 실제 센서 | **AGX Xavier + UVC 웹캠: host == CUDA view 30/30 프레임, staleness ~0.5 ms** ✅ |
@@ -167,16 +167,16 @@ worst_case_staleness ≤
 
 핵심 명제는 전송이 **페이로드 크기에 O(1)** 이라는 것이다: 고정 크기 디스크립터만 메타데이터 평면을 넘고 텐서는 공유 dma-buf에 남으므로, 페이로드는 한 번 쓰이고 도중에 복사되지 않는다.
 
-**다중스트림 로봇 워크로드, C++** ([`benchmarks/ros2_cpp`](benchmarks/ros2_cpp/README.md#multi-stream-cpu-delivery-and-cache-misses)): 카메라 4대와 LiDAR, IMU, 오도메트리를 297 MB/s까지 늘렸다. ROS 2는 이벤트 방식 executor로, axon은 1 kHz 루프로 받는다.
+**다중스트림 로봇 워크로드, C++** ([`benchmarks/ros2_cpp`](benchmarks/ros2_cpp/README.md#multi-stream-cpu-latency-delivery-and-cache-misses)): 카메라 4대와 LiDAR, IMU, 오도메트리를 297 MB/s까지 늘렸다. ROS 2는 이벤트 방식 executor로 받고, axon은 1 kHz 루프로 받거나 `TensorSubscriber::wait_any`에서 기다린다(이벤트 방식, [docs/usage.md](docs/usage.md#event-driven-consumer-wake-on-publish)).
 
-| 297 MB/s에서 (3회 중앙값) | rclcpp `UInt8MultiArray` | ROS 2 zero-copy | axon |
-|---|---|---|---|
-| CPU, 생산자 + 소비자 | 0.093 cores | 0.053 cores | **0.014 cores** |
-| 최악 스트림 전달률 | 0.51 (0.50~0.92) | 1.000 | **1.000** |
-| 초당 캐시미스 / 명령어 | 15.2 M / 0.208 B | 4.38 M / 0.123 B | **0.88 M / 0.023 B** |
-| 카메라 지연 p50 | 142 µs | 50 µs | 554 µs (1 kHz tick을 기다림) |
+| 297 MB/s에서 (3회 중앙값) | rclcpp `UInt8MultiArray` | ROS 2 zero-copy | axon, 1 kHz 루프 | axon, `wait_any` |
+|---|---|---|---|---|
+| CPU, 생산자 + 소비자 | 0.077 cores | 0.038 cores | **0.015 cores** | 0.019 cores |
+| 카메라 지연 p50 / p99 | 103 / 334 µs | 44 / 235 µs | 557 / 1017 µs | **29 / 124 µs** |
+| 초당 캐시미스 / 명령어 | 15.6 M / 0.219 B | 3.66 M / 0.127 B | **0.87 M / 0.024 B** | 1.31 M / 0.040 B |
+| 카메라 스트림 전달률 | 100 % | 100 % | 100 % | 100 % |
 
-C++에서는 모든 전송이 가볍기 때문에, CPU 차이는 실제로 있지만 절대값은 작다. axon의 1 kHz 루프는 프레임이 평균 반 tick을 기다리므로 지연을 대가로 치른다. 아래 rclpy 측정(0.30 vs 0.98 cores)의 차이는 거의 전부 Python 비용이다:
+C++에서는 모든 전송이 가볍기 때문에, CPU 차이는 실제로 있지만 절대값은 작다. 이벤트 방식의 axon은 ROS 2 zero-copy 경로의 절반 CPU로 가장 낮은 지연을 낸다. 1 kHz 루프는 CPU를 더 적게 쓰지만 프레임이 반 tick을 기다린다. 아래 rclpy 측정(0.30 vs 0.98 cores)의 차이는 거의 전부 Python 비용이다:
 
 ![CPU vs bandwidth](docs/assets/02_cpu_sweep.png)
 
@@ -184,11 +184,11 @@ C++에서는 모든 전송이 가볍기 때문에, CPU 차이는 실제로 있�
 
 | 페이로드 | host → host: ROS 2 zero-copy / axon | GPU → GPU: ROS 2 zero-copy / axon |
 |---|---|---|
-| 147 KiB | 24 / **4** | 48 / **23** |
-| 1 MiB | 34 / **15** | 168 / **23** |
-| 4 MiB | 78 / **59** | 489 / **25** |
+| 147 KiB | 25 / **4** | 50 / **24** |
+| 1 MiB | 36 / **15** | 171 / **25** |
+| 4 MiB | 80 / **59** | 485 / **26** |
 
-host에서는 ROS 2의 zero-copy 경로가 axon에 가깝다. 둘 다 페이로드를 공유 메모리에 한 번 쓰고, axon이 아끼는 것은 메시지마다 붙는 약 20 µs의 고정 비용이다. GPU에서는 ROS 2 메시지가 host 메모리에 있어야 하므로 페이로드가 전송 앞뒤로 D2H와 H2D를 거친다. axon은 device 버퍼 자체를 넘기므로 크기와 상관없이 23~25 µs를 유지한다. 기본 설정의 Fast DDS는 이 크기에서 zero-copy 경로를 쓰지 **않으며**, 그 디렉터리의 XML 프로파일이 필요하다.
+host에서는 ROS 2의 zero-copy 경로가 axon에 가깝다. 둘 다 페이로드를 공유 메모리에 한 번 쓰고, axon이 아끼는 것은 메시지마다 붙는 약 20 µs의 고정 비용이다. GPU에서는 ROS 2 메시지가 host 메모리에 있어야 하므로 페이로드가 전송 앞뒤로 D2H와 H2D를 거친다. axon은 device 버퍼 자체를 넘기므로 크기와 상관없이 24~26 µs를 유지한다. 기본 설정의 Fast DDS는 이 크기에서 zero-copy 경로를 쓰지 **않으며**, 그 디렉터리의 XML 프로파일이 필요하다.
 
 **단일스트림 지연, rclpy 대비** ([`benchmarks/`](benchmarks/)):
 
@@ -198,7 +198,7 @@ host에서는 ROS 2의 zero-copy 경로가 axon에 가깝다. 둘 다 페이로�
 
 ![Memory cost](docs/assets/04_memory.png)
 
-ROS2(rclpy)는 같은 데이터를 옮기는 데 **캐시미스 8.6배**, **명령어 5배** 를 쓴다. C++로 ROS 2 zero-copy 경로와 같은 측정 구간에서 비교하면 그 차이는 5배와 5.3배다.
+ROS2(rclpy)는 같은 데이터를 옮기는 데 **캐시미스 8.6배**, **명령어 5배** 를 쓴다. C++로 ROS 2 zero-copy 경로와 같은 측정 구간에서 비교하면 그 차이는 4.2배와 5.3배다(axon의 1 kHz 루프 기준).
 
 **로봇 보드 없이도 실제 GPU zero-copy.** axon의 FD 사이드카가 살아 있는 RTX 5080 GPU 메모리 핸들을 프로세스 간에 나른다: 200/200 프레임 on-GPU 검증, **host 페이로드 복사 0**, 1.68 GB zero-copy 이동. 여기에 RT page fault **프레임당 0** 측정. [docs/hardware-verification.md](docs/hardware-verification.md) 및 [docs/adr/](docs/adr/)의 아키텍처 결정 참조.
 
@@ -407,7 +407,9 @@ A. Apache 2.0 (특허 그랜트 포함 — 로봇 산업 채택에 더 친화적
 - [x] **방향 A — vision→LLM zero-copy** — 프레임워크 텐서 ↔ axon GPU 버퍼를 `__cuda_array_interface__`로 생산자(`device_array`)·소비자(`latest_view`) 양쪽에서 연결 + 소비자 측 CUDA VMM import. 동작하는 2-프로세스 데모(`examples/vla_demo/`: DeiT-tiny → axon → GPT-2 prefill, 양쪽 동일 GPU 포인터, 호스트 복사 없음)
 - [x] **Jetson NvBufSurface 백엔드** — `PoolBackend::NvBufSurface` (`AXON_ENABLE_JETSON`): UVC 카메라가 pool에 직접 캡처하고, 다른 프로세스가 같은 프레임을 host view **와** CUDA 포인터로 복사 없이 받음. 실제 웹캠과 AGX Xavier에서 검증(`examples/jetson_camera/`, host==device 4/4, staleness ~0.5 ms)
 - [x] **방향 D — NVENC 데이터 플라이휠** — 공유 GPU 버퍼에서 곧장 디스크로 녹화: 녹화기가 각 `latest_view()`를 호스트 복사 없이 하드웨어 NVENC에 전달(`examples/nvenc_flywheel/`, 디코드로 검증된 H.264)
-- [x] **ROS 2 zero-copy 경로와의 공정한 C++ 비교** — rclcpp, loaned message + Fast DDS data-sharing, host와 GPU(`benchmarks/ros2_cpp/`): host 1 MiB 15 vs 34 µs, GPU→GPU 4 MiB 25 vs 489 µs, 297 MB/s 다중스트림 0.014 vs 0.053 cores
+- [x] **ROS 2 zero-copy 경로와의 공정한 C++ 비교** — rclcpp, loaned message + Fast DDS data-sharing, host와 GPU(`benchmarks/ros2_cpp/`): host 1 MiB 15 vs 36 µs, GPU→GPU 4 MiB 26 vs 485 µs, 297 MB/s 다중스트림 카메라 p50 29 vs 44 µs (0.019 vs 0.038 cores)
+- [x] **이벤트 방식 소비자** — `TensorSubscriber::wait_for_update` / `wait_any`가 메타데이터 슬롯의 futex에서 기다린다(스트림 여러 개는 `futex_waitv`). 생산자는 누가 기다릴 때만 `FUTEX_WAKE`를 호출하므로 RT 생산자의 `publish()`에는 syscall이 없다
+- [x] **조용한 드롭 제거** — 맞지 않는 디스크립터는 `publish()`가 `EMSGSIZE`/`EINVAL`과 함께 -1을 돌려주고 seqno를 쓰지 않는다. 핸드셰이크에 실을 수 없는 import 정보는 `TensorPublisher::create()`가 거부한다(`E2BIG`). Python 바인딩은 예외를 던진다
 
 다음:
 

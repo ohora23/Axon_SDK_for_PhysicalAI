@@ -1,0 +1,11 @@
+{"role":"meta","cpus_online":"0-1,5-9,13-15","cuda_buffer_backend":"0.1.2-1resolute.20260915.052926","fastdds":"3.6.2-1resolute.20260728.174239","date":"2026-10-18T15:37:00+00:00"}
+{"probe":"ipc_event_wait","wait_sync_p50_us":71.8,"wait_sync_p90_us":73.3,"empty_stream_sync_p50_us":0.3}
+{"rep":1,"role":"sub","transport":"rosidl_buffer","bytes":150528,"gpu":1,"frames_sent":500,"frames_seen":500,"torn":0,"cpu_fallback":0,"n":480,"p50_us":126.0,"p90_us":130.4,"p99_us":138.7,"max_us":169.0,"mean_us":125.8}
+{"rep":1,"role":"sub","transport":"rosidl_buffer","bytes":1048576,"gpu":1,"frames_sent":500,"frames_seen":500,"torn":0,"cpu_fallback":0,"n":480,"p50_us":122.8,"p90_us":127.9,"p99_us":132.6,"max_us":141.0,"mean_us":123.5}
+{"rep":1,"role":"sub","transport":"rosidl_buffer","bytes":4194304,"gpu":1,"frames_sent":500,"frames_seen":500,"torn":0,"cpu_fallback":0,"n":480,"p50_us":124.2,"p90_us":127.8,"p99_us":136.0,"max_us":138.6,"mean_us":124.4}
+{"rep":2,"role":"sub","transport":"rosidl_buffer","bytes":150528,"gpu":1,"frames_sent":500,"frames_seen":500,"torn":0,"cpu_fallback":0,"n":480,"p50_us":122.6,"p90_us":127.1,"p99_us":134.7,"max_us":138.0,"mean_us":123.1}
+{"rep":2,"role":"sub","transport":"rosidl_buffer","bytes":1048576,"gpu":1,"frames_sent":500,"frames_seen":500,"torn":0,"cpu_fallback":0,"n":480,"p50_us":123.6,"p90_us":129.5,"p99_us":140.7,"max_us":147.9,"mean_us":124.5}
+{"rep":2,"role":"sub","transport":"rosidl_buffer","bytes":4194304,"gpu":1,"frames_sent":500,"frames_seen":500,"torn":0,"cpu_fallback":0,"n":480,"p50_us":123.3,"p90_us":128.6,"p99_us":137.3,"max_us":171.5,"mean_us":124.5}
+{"rep":3,"role":"sub","transport":"rosidl_buffer","bytes":150528,"gpu":1,"frames_sent":500,"frames_seen":500,"torn":0,"cpu_fallback":0,"n":480,"p50_us":122.5,"p90_us":128.8,"p99_us":136.6,"max_us":143.2,"mean_us":123.7}
+{"rep":3,"role":"sub","transport":"rosidl_buffer","bytes":1048576,"gpu":1,"frames_sent":500,"frames_seen":500,"torn":0,"cpu_fallback":0,"n":480,"p50_us":125.8,"p90_us":130.3,"p99_us":141.1,"max_us":152.2,"mean_us":125.9}
+{"rep":3,"role":"sub","transport":"rosidl_buffer","bytes":4194304,"gpu":1,"frames_sent":500,"frames_seen":500,"torn":0,"cpu_fallback":0,"n":480,"p50_us":127.2,"p90_us":137.2,"p99_us":187.1,"max_us":255.8,"mean_us":129.9}

@@ -34,13 +34,23 @@ for rep in $(seq 1 "$REPS"); do
     done
   done
 done
+# The event wait alone, and cudaipc with the producer host-synced first (event already done).
+"$BIN/ipc_event_probe" >> "$OUT"
+for nbytes in 150528 1048576 4194304; do
+  f="$HERE/results/cudaipc_hostsync_${nbytes}"
+  CUDAIPC_HOST_SYNC=1 "$BIN/cudaipc_bench" sub "$nbytes" "$FRAMES" "$RATE_HZ" > "$f.sub" 2> "$f.err" & SUB=$!
+  sleep 1
+  CUDAIPC_HOST_SYNC=1 "$BIN/cudaipc_bench" pub "$nbytes" "$FRAMES" "$RATE_HZ" > /dev/null 2>> "$f.err"
+  wait $SUB
+  grep '^{' "$f.sub" | sed 's/^{/{"rep":0,/' >> "$OUT"
+done
 python3 -I - "$OUT" <<'PY'
 import json, statistics as st, sys
 from collections import defaultdict
 d = defaultdict(list)
 for l in open(sys.argv[1]):
     o = json.loads(l)
-    if o["role"] == "sub": d[(o["bytes"], o["transport"])].append(o)
+    if o.get("role") == "sub" and not o.get("host_sync_producer"): d[(o["bytes"], o["transport"])].append(o)
 print("| payload | transport | p50 µs (runs) | p99 µs | delivered | torn |")
 print("|---|---|---|---|---|---|")
 for k in sorted(d, key=lambda k: (k[0], ["ros_loan", "cudaipc", "axon"].index(k[1]))):

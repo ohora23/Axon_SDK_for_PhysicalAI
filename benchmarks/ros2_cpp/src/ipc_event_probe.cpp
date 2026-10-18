@@ -2,9 +2,11 @@
 // ipc_event_probe — what it costs a consumer process to wait on a CUDA IPC event
 // that a producer process recorded (the completion mechanism ros2_cuda_ipc and
 // rosidl::Buffer's CUDA backend use). The producer records the event after a tiny
-// memset and host-syncs, so the event is already complete when the consumer waits;
-// the consumer measures record -> its own stream synced, and an empty-stream sync
-// as the floor. Standalone (CUDA runtime only); fork before any CUDA call.
+// memset and host-syncs, so the event is already complete when the consumer is told.
+// The consumer stamps the time itself, right before cudaStreamWaitEvent, so pipe and
+// scheduler wake-up are not counted; it reports wait + sync of its own stream, and the
+// same call on an empty stream as the floor. Standalone (CUDA runtime only); fork
+// before any CUDA call.
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
@@ -36,10 +38,13 @@ int main() {
         if (cudaIpcOpenEventHandle(&ev, h) != cudaSuccess) { std::puts("cudaIpcOpenEventHandle failed"); return 1; }
         std::vector<double> wait_us, floor_us;
         for (int i = 0; i < kRounds; ++i) {
-            unsigned long long t;
-            if (read(time_pipe[0], &t, sizeof t) != sizeof t) return 1;
-            cudaStreamWaitEvent(s, ev, 0);
-            cudaStreamSynchronize(s);
+            unsigned long long ready;
+            if (read(time_pipe[0], &ready, sizeof ready) != sizeof ready) return 1;
+            const unsigned long long t = now_ns();
+            if (cudaStreamWaitEvent(s, ev, 0) != cudaSuccess || cudaStreamSynchronize(s) != cudaSuccess) {
+                std::puts("cudaStreamWaitEvent/cudaStreamSynchronize failed");
+                return 1;
+            }
             wait_us.push_back((now_ns() - t) / 1e3);
             const unsigned long long c = now_ns();
             cudaStreamSynchronize(s);
@@ -47,7 +52,7 @@ int main() {
         }
         std::sort(wait_us.begin(), wait_us.end());
         std::sort(floor_us.begin(), floor_us.end());
-        std::printf("IPC event wait (record -> consumer stream synced): p50 %.1f us, p90 %.1f us | empty-stream sync p50 %.1f us\n",
+        std::printf("{\"probe\":\"ipc_event_wait\",\"wait_sync_p50_us\":%.1f,\"wait_sync_p90_us\":%.1f,\"empty_stream_sync_p50_us\":%.1f}\n",
                     wait_us[kRounds / 2], wait_us[kRounds * 9 / 10], floor_us[kRounds / 2]);
         return 0;
     }

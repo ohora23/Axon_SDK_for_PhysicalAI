@@ -27,6 +27,13 @@ alternatives don't quite occupy:
 - **Thin and readable.** A core you can audit in an afternoon, not a multi-year
   framework.
 
+Measured against the two ROS 2 transports that also share GPU memory between processes
+(the official Lyrical `rosidl::Buffer` CUDA backend and ros2_cuda_ipc), axon delivers a GPU
+frame to another process in **~25 µs instead of ~125 µs**. The gap has two parts. The first is
+a descriptor over DDS, ~25-30 µs. The second is a consumer-side CUDA IPC event wait of
+~60-70 µs, which axon avoids by host-synchronizing the producer before it publishes. That costs the producer, so it is a trade-off, not a free win
+([benchmarks/ros2_cpp](../benchmarks/ros2_cpp/README.md#gpu--gpu-against-the-other-gpu-zero-copy-transports)).
+
 It is **not** the most mature, most complete, or most hardware-validated option.
 It targets a niche between the heavyweight vendor frameworks and the raw kernel
 primitives. Whether it is "the best" reduces to whether that niche matches your
@@ -106,7 +113,27 @@ competition for the vision/recording use cases.
 - **DDS + shared memory (Cyclone, Fast DDS)** — zero-copy on host via loaned
   samples; the backbone under ROS 2. Cross-node capable, GPU-agnostic.
 
-### 3.3 Primitives — what everything is built on
+### 3.3 ROS 2 GPU buffer transports — the newest and closest analogs
+
+- **`rosidl::Buffer` + `cuda_buffer_backend` (ROS 2 Lyrical, official).** Message fields such
+  as `sensor_msgs/Image.data` can live in a pluggable storage backend. The CUDA backend
+  allocates them in CUDA VMM, passes the FDs over a Unix socket, and synchronizes with CUDA
+  IPC write and read events. It falls back to the CPU path automatically. A ROS 2
+  maintainer described the `rcl::Buffer` work as "heavily inspired by Nitros" but generic
+  ([ROS Discourse](https://discourse.openrobotics.org/t/ros2-cuda-ipc-zero-copy-gpu-data-sharing-between-ros-2-processes/57157)).
+  It is the ROS-native answer, and for an all-ROS-2 system on Lyrical it is the default
+  choice.
+- **ros2_cuda_ipc** ([dskkato/ros2_cuda_ipc](https://github.com/dskkato/ros2_cuda_ipc), MIT).
+  The same design as a standalone library for Humble/Jazzy, with explicit descriptors,
+  buffer references held by each reader's `ReadHandle`, and a Python/DLPack subscriber.
+- **Measured** (GPU → GPU, 147 KiB-4 MiB, p50): both are ~123-127 µs and flat in size; axon
+  is ~25 µs. Both use the same two mechanisms axon does not: a DDS descriptor and a
+  consumer-side CUDA IPC event wait (~60-70 µs on its own). They also give things axon does
+  not: an asynchronous producer, and buffers kept alive while a reader holds them instead
+  of latest-value-wins. Both also carry typed ROS messages. `rosidl::Buffer` adds an
+  automatic CPU fallback path; ros2_cuda_ipc needs explicit bridge nodes for CPU consumers.
+
+### 3.4 Primitives — what everything is built on
 
 - **dma-buf / PRIME** — the kernel mechanism for sharing buffers across
   drivers/processes (V4L2 → GPU → encoder). axon's host path is exactly this.
@@ -115,11 +142,13 @@ competition for the vision/recording use cases.
 - **Triton + CUDA shared memory** — lets serving clients pass GPU memory in without
   a host copy. Same idea, different (inference-serving) use case.
 
-### 3.4 Comparison
+### 3.5 Comparison
 
 | Solution | Zero-copy GPU across processes | Coupling | Cross-node | Delivery model | Maturity |
 |---|---|---|---|---|---|
-| **axon** | Yes (CUDA VMM) | **None** (plain `device_ptr` / CAI) | No (single host) | **Latest-value-wins, bounded staleness** | Pre-alpha, dev-PC verified |
+| **axon** | Yes (CUDA VMM), **~25 µs GPU→GPU** | **None** (plain `device_ptr` / CAI) | No (single host) | **Latest-value-wins, bounded staleness** | Pre-alpha, dev-PC verified |
+| ROS 2 `rosidl::Buffer` CUDA backend | Yes (CUDA VMM + IPC events), ~124 µs GPU→GPU | ROS 2 Lyrical+ | No | ROS pub/sub, CPU fallback | New (Lyrical, 0.1.x) |
+| ros2_cuda_ipc | Yes (CUDA VMM + IPC events), ~125 µs GPU→GPU | ROS 2 (Humble+) | No | ROS pub/sub, reader-held buffers | Experimental |
 | Isaac ROS / NITROS | Yes | ROS 2 + NVIDIA | No | ROS pub/sub | Production |
 | DeepStream | Yes | GStreamer + NVIDIA | Via streaming | Pipeline / queue | Production |
 | Holoscan | Yes | Holoscan graph + NVIDIA | Yes (RDMA) | Operator graph | Production |
@@ -140,6 +169,9 @@ competition for the vision/recording use cases.
   shipped backend.
 - **The mechanism is not novel.** axon's value is packaging and semantics, not a
   new primitive.
+- **The producer blocks on its GPU work.** axon's low GPU latency comes from host-synchronizing
+  before publish; the event-based ROS 2 transports let the producer queue more GPU work
+  instead. A producer that must not block wants their model.
 
 ---
 
@@ -157,8 +189,10 @@ Reach for axon when **all** of these hold:
 
 Prefer a mature alternative when:
 
-- You are already all-in on **ROS 2** and want GPU zero-copy between nodes →
-  **Isaac ROS / NITROS**.
+- You are already all-in on **ROS 2** and want GPU zero-copy between nodes → the
+  official **`rosidl::Buffer` CUDA backend** on Lyrical or later (ros2_cuda_ipc on older
+  distros), or **Isaac ROS / NITROS**. Reach for axon there only if the ~100 µs per GPU
+  frame or the RT latest-value semantics matter to you.
 - You want a batteries-included **vision pipeline** (decode → infer → encode) →
   **DeepStream** (or **Holoscan** for low-latency sensor fusion).
 - You are on **Jetson/DRIVE** and want formally-verified buffer/sync interop →

@@ -510,8 +510,8 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
                 std::memcpy(&head_seq, hdr + 8, 8);
                 std::memcpy(&tail_seq, tail, 8);
 
-                if (head_seq != tail_seq) ++res.torn;
                 std::uint64_t now = axon::rt_now_ns();
+                if (head_seq != tail_seq) { ++res.torn; continue; }  // not timed, as in the other cells
                 if (head_seq > last_seqno) {
                     ++seen;
                     if (seen > 20) latencies.push_back((now - t0) / 1000.0);

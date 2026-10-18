@@ -56,6 +56,7 @@ flowchart LR
 | 항목 | 결과 |
 |---|---|
 | 프로세스 간 GPU → GPU, 4 MiB (ROS 2 loaned message + data-sharing 대비, C++) | 지연 **19× 낮음** (26 µs vs 485 µs) |
+| GPU 메모리를 공유하는 ROS 2 전송 대비 GPU → GPU (공식 `rosidl::Buffer` CUDA 백엔드, ros2_cuda_ipc) | **약 5× 낮음** (크기와 상관없이 ≈25 µs vs ≈125 µs). 생산자가 CUDA IPC event를 넘기는 대신 host에서 동기화한다 |
 | host → host, 1 MiB (같은 비교) | **2.4× 낮음** (15 µs vs 36 µs), 4 MiB에서는 1.4× |
 | 다중스트림 로봇 워크로드 @ 297 MB/s (같은 비교, 이벤트 방식 소비자) | 카메라 p50 **29 vs 44 µs**, **CPU 절반** (0.019 vs 0.038 cores), 캐시미스 2.8× 적음, 모든 프레임 전달 |
 | RT 루프 page fault | **0 / frame** |
@@ -87,7 +88,9 @@ CUDA VMM, `__cuda_array_interface__`/DLPack) 위에 서 있고, 성숙한 시스
 
 | 솔루션 | 프로세스 간 GPU zero-copy | 결합도 | 전달 모델 |
 |---|---|---|---|
-| **axon** | ✅ (CUDA VMM) | **없음** — `device_ptr` / CAI | **latest-value-wins, 상한 staleness** |
+| **axon** | ✅ (CUDA VMM, GPU→GPU 약 25 µs) | **없음** — `device_ptr` / CAI | **latest-value-wins, 상한 staleness** |
+| ROS 2 `rosidl::Buffer` CUDA 백엔드 (Lyrical) | ✅ (GPU→GPU 약 124 µs) | ROS 2 Lyrical 이상 | ROS pub/sub |
+| ros2_cuda_ipc | ✅ (GPU→GPU 약 125 µs) | ROS 2 | ROS pub/sub |
 | NVIDIA Isaac ROS / NITROS | ✅ | ROS 2 + NVIDIA | ROS pub/sub |
 | NVIDIA DeepStream | ✅ | GStreamer + NVIDIA | 파이프라인 / 큐 |
 | Iceoryx2 / eCAL | ❌ 호스트 SHM만 | 없음 | 큐 |

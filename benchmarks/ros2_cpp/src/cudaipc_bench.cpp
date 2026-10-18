@@ -152,7 +152,7 @@ int run_sub(std::size_t bytes, int frames, int rate_hz) {
     auto sub = node->create_subscription<GpuImage>("/axon_bench_cudaipc", qos(), [](const GpuImage&) {}, opts);
     ros2_cuda_ipc_image::ImageReader reader;
 
-    std::vector<double> lat;
+    std::vector<double> lat, st_take, st_read, st_sync;  // per-stage µs, timed frames only
     int seen = 0, torn = 0, read_fail = 0;
     std::uint64_t last = 0;
     const double deadline = 10.0 + frames * (2.0 / rate_hz);
@@ -170,21 +170,26 @@ int run_sub(std::size_t bytes, int frames, int rate_hz) {
         check(cudaMemcpyAsync(host + 2, dev + bytes - 8, 8, cudaMemcpyDeviceToHost, stream), "DtoH tail");
         check(cudaStreamSynchronize(stream), "cudaStreamSynchronize");
         const std::uint64_t now = axon::rt_now_ns();
-        if (std::getenv("CUDAIPC_DEBUG") && seen > 20)  // per-stage breakdown, µs
-            std::fprintf(stderr, "stage take=%.1f read=%.1f sync=%.1f\n", (t_take - host[0]) / 1e3,
-                         (t_read - t_take) / 1e3, (now - t_read) / 1e3);
         if (host[1] != host[2]) { ++torn; continue; }
         if (host[1] <= last) continue;
         last = host[1];
         ++seen;
-        if (seen > 20) lat.push_back((now - host[0]) / 1000.0);
+        if (seen > 20) {
+            lat.push_back((now - host[0]) / 1000.0);
+            st_take.push_back((t_take - host[0]) / 1e3);  // t0 -> descriptor taken from DDS
+            st_read.push_back((t_read - t_take) / 1e3);   // read(): import + event wait enqueued
+            st_sync.push_back((now - t_read) / 1e3);      // event wait + 24 B readback + sync
+        }
     }
     std::printf("{\"role\":\"sub\",\"transport\":\"cudaipc\",\"bytes\":%zu,\"gpu\":1,\"frames_sent\":%d,"
                 "\"frames_seen\":%d,\"torn\":%d,\"read_fail\":%d,\"n\":%zu,\"p50_us\":%.1f,\"p90_us\":%.1f,"
-                "\"p99_us\":%.1f,\"max_us\":%.1f,\"mean_us\":%.1f}\n",
+                "\"p99_us\":%.1f,\"max_us\":%.1f,\"mean_us\":%.1f,\"host_sync_producer\":%s,"
+                "\"stage_take_p50_us\":%.1f,\"stage_read_p50_us\":%.1f,\"stage_sync_p50_us\":%.1f}\n",
                 bytes, frames, seen, torn, read_fail, lat.size(), percentile(lat, 50), percentile(lat, 90),
                 percentile(lat, 99), lat.empty() ? 0.0 : *std::max_element(lat.begin(), lat.end()),
-                lat.empty() ? 0.0 : [&] { double t = 0; for (double x : lat) t += x; return t / lat.size(); }());
+                lat.empty() ? 0.0 : [&] { double t = 0; for (double x : lat) t += x; return t / lat.size(); }(),
+                std::getenv("CUDAIPC_HOST_SYNC") ? "true" : "false",
+                percentile(st_take, 50), percentile(st_read, 50), percentile(st_sync, 50));
     std::fflush(stdout);
     return seen > 0 ? 0 : 3;
 }

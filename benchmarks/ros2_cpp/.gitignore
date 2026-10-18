@@ -6,3 +6,4 @@ results/*
 !results/rep*.jsonl
 !results/ms_rep*.jsonl
 !results/cudaipc_rep.jsonl
+!results/rosidl_buffer_rep.jsonl

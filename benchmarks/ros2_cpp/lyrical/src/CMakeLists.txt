@@ -1,0 +1,22 @@
+cmake_minimum_required(VERSION 3.22)
+project(axon_bench_lyrical)
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(cuda_buffer REQUIRED)
+find_package(CUDAToolkit REQUIRED)
+add_executable(rosidl_buffer_bench rosidl_buffer_bench.cpp)
+target_compile_features(rosidl_buffer_bench PRIVATE cxx_std_20)
+# Lyrical dropped ament_target_dependencies: link the exported targets directly.
+if(TARGET cuda_buffer::cuda_buffer)
+  set(CUDA_BUFFER_LIB cuda_buffer::cuda_buffer)
+else()
+  set(CUDA_BUFFER_LIB ${cuda_buffer_TARGETS} ${cuda_buffer_LIBRARIES})
+  target_include_directories(rosidl_buffer_bench PRIVATE ${cuda_buffer_INCLUDE_DIRS})
+endif()
+# libcuda (the driver) only exists at run time, mounted by the NVIDIA container runtime;
+# link against the toolkit's stub and let libcuda_buffer's own libcuda need resolve then.
+target_link_libraries(rosidl_buffer_bench rclcpp::rclcpp ${sensor_msgs_TARGETS} ${CUDA_BUFFER_LIB} CUDA::cudart CUDA::cuda_driver)
+target_link_options(rosidl_buffer_bench PRIVATE -Wl,--allow-shlib-undefined)
+install(TARGETS rosidl_buffer_bench DESTINATION lib/${PROJECT_NAME})
+ament_package()

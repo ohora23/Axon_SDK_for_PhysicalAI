@@ -57,8 +57,8 @@ flowchart LR
 |---|---|
 | 프로세스 간 GPU → GPU, 4 MiB (ROS 2 loaned message + data-sharing 대비, C++) | 지연 **19× 낮음** (26 µs vs 485 µs) |
 | GPU 메모리를 공유하는 ROS 2 전송 대비 GPU → GPU (공식 `rosidl::Buffer` CUDA 백엔드, ros2_cuda_ipc) | 기본 설정에서 **약 5× 낮음**(크기와 상관없이 ≈25 µs vs ≈125 µs), CUDA MPS를 켜면 **약 1.5×**(≈25 vs 35~42 µs). MPS가 없을 때 차이의 대부분은 GPU가 프로세스 사이에서 컨텍스트를 전환하는 비용이다. 여기서 axon 소비자는 24 B만 복사해 오며, 소비자가 커널을 실행하면 axon도 그 전환 비용을 낸다 |
-| 프로세스 간 axon vs **한 프로세스 안의** ROS 2 (intra-process `unique_ptr` / type adapter) | 모든 셀에서 **4~5 µs 빠름** (예: GPU 23 vs 28 µs, host 1 MiB 15 vs 20 µs). 노드를 한 프로세스로 모아도 axon보다 빨라지지 않는다 |
-| 구독자 1 → 8개, GPU 1 MiB (이벤트 방식 소비자, 깊은 C-state 끔) | **25 → 39 µs** vs 156 → 450 µs. 생산자와 구독자 전체 CPU 0.009 vs 0.26 cores |
+| 프로세스 간 axon vs **한 프로세스 안의** ROS 2 (intra-process `unique_ptr` / type adapter) | **느리지 않다**: axon 소비자가 spin하고 ROS 2가 `spin_some` 루프로 받을 때 4~5.5 µs 빠르고(예: GPU 24 vs 28 µs), 두 소비자가 모두 blocking일 때(깊은 C-state 끔) 1.3~2 µs 빠르다. 노드를 한 프로세스로 모아도 axon보다 빨라지지 않는다 |
+| 구독자 1 → 8개, GPU 1 MiB (이벤트 방식 소비자, 깊은 C-state 끔) | **25 → 38 µs** vs 154 → 450 µs. 생산자와 구독자 전체 CPU 0.021 vs 0.26 cores |
 | host → host, 1 MiB (같은 비교) | **2.4× 낮음** (15 µs vs 36 µs), 4 MiB에서는 1.4× |
 | 다중스트림 로봇 워크로드 @ 297 MB/s (같은 비교, 이벤트 방식 소비자) | 카메라 p50 **29 vs 44 µs**, **CPU 절반** (0.019 vs 0.038 cores), 캐시미스 2.8× 적음, 모든 프레임 전달 |
 | RT 루프 page fault | **0 / frame** |

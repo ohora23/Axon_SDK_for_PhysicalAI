@@ -34,13 +34,14 @@ and **35-42 µs with CUDA MPS**. Two costs make up the gap:
 
 - **A descriptor over DDS, ~25-30 µs.** axon uses a shared-memory seqlock instead, so it always
   avoids this cost.
-- **~60 µs for the GPU to switch from the producer's context to the consumer's.** MPS removes
-  it, because the processes then share one context. A consumer that launches a kernel on the
-  frame pays this switch with axon too. axon's 25 µs ends at a 24-byte copy back to the host.
+- **~60 µs, most likely for the GPU to switch from the producer's context to the consumer's.**
+  MPS removes it, because the processes then share one context. A consumer that launches a
+  kernel on the frame most likely pays this switch with axon too: an event-free stand-in for
+  axon's handoff did. axon's 25 µs ends at a 24-byte copy back to the host.
 
 axon's producer host-syncs before it publishes. Written naively, that halves throughput when
-the producer also has CPU work. Pipelined, it costs no throughput, only up to one CPU stage of
-latency. So it is a constraint on how the producer is written
+the producer also has CPU work. Pipelined, it costs no throughput in a transport-free probe,
+only up to one CPU stage of latency. So it is a constraint on how the producer is written
 ([benchmarks/ros2_cpp](../benchmarks/ros2_cpp/README.md#gpu--gpu-against-the-other-gpu-zero-copy-transports)).
 
 It is **not** the most mature, most complete, or most hardware-validated option.
@@ -138,8 +139,8 @@ competition for the vision/recording use cases.
 - **Measured** (GPU → GPU, 147 KiB-4 MiB, p50): both are ~123-127 µs and flat in size, and axon
   is ~25 µs. With CUDA MPS they drop to 35-42 µs and axon stays at ~25 µs. Both send a DDS
   descriptor (~25-30 µs), which axon does not. Both also wait on a consumer-side CUDA IPC event,
-  which costs ~60 µs without MPS. That ~60 µs is the switch between the processes' GPU
-  contexts, not the event itself, so a kernel-launching axon consumer pays it too. They also give things axon does
+  which costs ~60 µs without MPS. That ~60 µs is most likely the switch between the processes'
+  GPU contexts, not the event itself, so a kernel-launching axon consumer would pay it too. They also give things axon does
   not: an asynchronous producer, and buffers kept alive while a reader holds them instead
   of latest-value-wins. Both also carry typed ROS messages. `rosidl::Buffer` adds an
   automatic CPU fallback path; ros2_cuda_ipc needs explicit bridge nodes for CPU consumers.
@@ -204,7 +205,7 @@ Prefer a mature alternative when:
   official **`rosidl::Buffer` CUDA backend** on Lyrical or later (ros2_cuda_ipc on older
   distros), or **Isaac ROS / NITROS**. Reach for axon there only if the RT latest-value
   semantics or the per-frame GPU latency matter to you. That gap is ~100 µs without MPS and
-  ~10-15 µs with it.
+  ~10-18 µs with it.
 - You want a batteries-included **vision pipeline** (decode → infer → encode) →
   **DeepStream** (or **Holoscan** for low-latency sensor fusion).
 - You are on **Jetson/DRIVE** and want formally-verified buffer/sync interop →

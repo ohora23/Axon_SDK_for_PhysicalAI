@@ -121,7 +121,8 @@ static void sleep_until(std::uint64_t target_ns) {
 static void print_sub_result(const char* transport, int bytes, int gpu, int frames_sent,
                               const SubResult& res) {
     const char* wait_env = std::getenv("BENCH_WAIT");
-    int wait_on = wait_env && atoi(wait_env) ? 1 : 0;
+    // ros_dyn has no blocking variant
+    int wait_on = wait_env && atoi(wait_env) && std::strcmp(transport, "ros_dyn") != 0 ? 1 : 0;
     const char* sub_id_env = std::getenv("BENCH_SUB_ID");
     int sub_id = sub_id_env ? atoi(sub_id_env) : 0;
     std::fprintf(stdout,
@@ -219,7 +220,8 @@ static SubResult run_sub_ros_dyn(int bytes, int frames, int rate_hz, int gpu) {
 
     auto start = std::chrono::steady_clock::now();
     double deadline = 10.0 + frames * (2.0 / rate_hz);
-    double cpu_first = 0;
+    double cpu_first = 0, cpu_last = 0;
+    std::uint64_t wall_last = 0;
     std::uint64_t wall_first = 0;
 
     if (gpu == 1) {
@@ -246,9 +248,11 @@ static SubResult run_sub_ros_dyn(int bytes, int frames, int rate_hz, int gpu) {
                     }
                     if (seen > 20) latencies.push_back((now - t0) / 1000.0);
                     last_seqno = head_seq;
+                    cpu_last = cpu_seconds();  // the CPU window ends at the last frame taken
+                    wall_last = axon::rt_now_ns();
                 }
             }
-            if (seen >= frames) break;
+            if (seen >= frames || last_seqno >= (std::uint64_t)frames) break;
         }
         check_cuda(cuMemFree(d_dst), "cuMemFree");
     } else {
@@ -269,17 +273,19 @@ static SubResult run_sub_ros_dyn(int bytes, int frames, int rate_hz, int gpu) {
                     }
                     if (seen > 20) latencies.push_back((now - t0) / 1000.0);
                     last_seqno = head_seq;
+                    cpu_last = cpu_seconds();  // the CPU window ends at the last frame taken
+                    wall_last = axon::rt_now_ns();
                 }
             }
-            if (seen >= frames) break;
+            if (seen >= frames || last_seqno >= (std::uint64_t)frames) break;
         }
     }
 
     res.frames_seen = seen;
     res.cpu_s = cpu_seconds();
     if (seen >= 1) {
-        res.cpu_window_s = cpu_seconds() - cpu_first;
-        res.window_s = (axon::rt_now_ns() - wall_first) / 1e9;
+        res.cpu_window_s = cpu_last - cpu_first;
+        res.window_s = (wall_last - wall_first) / 1e9;
     }
     res.samples_us = std::move(latencies);
     print_sub_result("ros_dyn", bytes, gpu, frames, res);
@@ -377,7 +383,8 @@ static SubResult run_sub_ros_loan(int bytes, int frames, int rate_hz, int gpu) {
 
     auto start = std::chrono::steady_clock::now();
     double deadline = 10.0 + frames * (2.0 / rate_hz);
-    double cpu_first = 0;
+    double cpu_first = 0, cpu_last = 0;
+    std::uint64_t wall_last = 0;
     std::uint64_t wall_first = 0;
 
     CUdeviceptr d_dst = 0;
@@ -420,21 +427,23 @@ static SubResult run_sub_ros_loan(int bytes, int frames, int rate_hz, int gpu) {
                 }
                 if (seen > 20) latencies.push_back((now - t0) / 1000.0);
                 last_seqno = head_seq;
+                cpu_last = cpu_seconds();  // the CPU window ends at the last frame taken
+                wall_last = axon::rt_now_ns();
             }
             if (rcl_return_loaned_message_from_subscription(handle, loaned) != RCL_RET_OK) {
                 std::fprintf(stderr, "rcl_return_loaned_message_from_subscription failed\n");
                 std::exit(1);
             }
         }
-        if (seen >= frames) break;
+        if (seen >= frames || last_seqno >= (std::uint64_t)frames) break;
     }
     if (gpu == 1) check_cuda(cuMemFree(d_dst), "cuMemFree");
 
     res.frames_seen = seen;
     res.cpu_s = cpu_seconds();
     if (seen >= 1) {
-        res.cpu_window_s = cpu_seconds() - cpu_first;
-        res.window_s = (axon::rt_now_ns() - wall_first) / 1e9;
+        res.cpu_window_s = cpu_last - cpu_first;
+        res.window_s = (wall_last - wall_first) / 1e9;
     }
     res.samples_us = std::move(latencies);
     print_sub_result("ros_loan", bytes, gpu, frames, res);
@@ -454,8 +463,16 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
         TensorPoolConfig{nbuf, (size_t)bytes,
                          gpu == 1 ? PoolBackend::Accelerator : PoolBackend::Custom, nullptr});
     auto pub = TensorPublisher::create("bench/axon", *pool);
-    int accepted = pub->handshake_pool();
-    (void)accepted;
+    // Like the ROS 2 producers: wait (up to 10 s) for BENCH_NSUBS subscribers, then 500 ms.
+    const char* nsubs_wait_env = std::getenv("BENCH_NSUBS");
+    const int nsubs_wait = nsubs_wait_env ? std::max(1, atoi(nsubs_wait_env)) : 1;
+    int accepted = 0;
+    const auto hs_start = std::chrono::steady_clock::now();
+    while (accepted < nsubs_wait && std::chrono::steady_clock::now() - hs_start < std::chrono::seconds(10)) {
+        const int n = pub->handshake_pool();
+        if (n > 0) accepted += n;
+    }
+    if (nsubs_wait > 1) std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     std::vector<uint8_t> src(bytes);
     for (int i = 0; i < (int)bytes; ++i) src[i] = (uint8_t)(i * 31 & 0xff);
@@ -542,7 +559,8 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
 
     auto start = std::chrono::steady_clock::now();
     double deadline = 10.0 + frames * (2.0 / rate_hz);
-    double cpu_first = 0;
+    double cpu_first = 0, cpu_last = 0;
+    std::uint64_t wall_last = 0;
     std::uint64_t wall_first = 0;
 
     if (gpu == 0) {
@@ -568,9 +586,11 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
                     }
                     if (seen > 20) latencies.push_back((now - t0) / 1000.0);
                     last_seqno = head_seq;
+                    cpu_last = cpu_seconds();  // the CPU window ends at the last frame taken
+                    wall_last = axon::rt_now_ns();
                 }
             }
-            if (seen >= frames) break;
+            if (seen >= frames || last_seqno >= (std::uint64_t)frames) break;
         }
     } else {
         if (gpu == 1) init_cuda_ctx();
@@ -603,17 +623,19 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
                     }
                     if (seen > 20) latencies.push_back((now - t0) / 1000.0);
                     last_seqno = head_seq;
+                    cpu_last = cpu_seconds();  // the CPU window ends at the last frame taken
+                    wall_last = axon::rt_now_ns();
                 }
             }
-            if (seen >= frames) break;
+            if (seen >= frames || last_seqno >= (std::uint64_t)frames) break;
         }
     }
 
     res.frames_seen = seen;
     res.cpu_s = cpu_seconds();
     if (seen >= 1) {
-        res.cpu_window_s = cpu_seconds() - cpu_first;
-        res.window_s = (axon::rt_now_ns() - wall_first) / 1e9;
+        res.cpu_window_s = cpu_last - cpu_first;
+        res.window_s = (wall_last - wall_first) / 1e9;
     }
     res.samples_us = std::move(latencies);
     print_sub_result("axon", bytes, gpu, frames, res);

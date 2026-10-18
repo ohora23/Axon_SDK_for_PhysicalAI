@@ -151,7 +151,7 @@ consumer's next kernel, in another process. 3 runs, p50 µs:
 | no event (axon's pattern, stand-in): producer host-syncs, tells the consumer over a pipe, the consumer launches | 62-72 | 8.5-17.4 |
 | the same two streams in **one** process, normal event / host-sync | 1.3 / 4.9 | (same) |
 
-The consumer's `cudaStreamWaitEvent` call returns in 1.1-1.5 µs, so a consumer can wait on the
+The consumer's `cudaStreamWaitEvent` call returns in 1.2-1.6 µs, so a consumer can wait on the
 GPU without blocking its thread. But without MPS the GPU still needs about 60 µs before the
 consumer's work runs, with or without an event. MPS also changes how IPC events are handled,
 so this does not prove the event costs nothing, but the event-free row pays the same. In the
@@ -200,10 +200,10 @@ K ≥ 1 ms), 3 runs, median:
 
 | K µs | C µs | `sync_naive` frames/s (GPU busy) | `sync_pipelined` | `event` |
 |---|---|---|---|---|
-| 50 | 0 | 17,620 (91.5 %) | 18,972 (98.5 %) | 18,829 (97.8 %) |
-| 50 | 50 | 9,346 (48.5 %) | 18,290 (95.0 %) | 18,294 (95.0 %) |
+| 50 | 0 | 17,627 (91.5 %) | 18,973 (98.5 %) | 18,836 (97.8 %) |
+| 50 | 50 | 9,346 (48.5 %) | 18,277 (94.9 %) | 18,301 (95.1 %) |
 | 200 | 0 | 4,837 (97.7 %) | 4,934 (99.6 %) | 4,924 (99.4 %) |
-| 200 | 200 | 2,457 (49.6 %) | 4,881 (98.6 %) | 4,882 (98.6 %) |
+| 200 | 200 | 2,457 (49.6 %) | 4,881 (98.6 %) | 4,883 (98.6 %) |
 | 1000 | 1000 | 498 (50.0 %) | 993 (99.7 %) | 993 (99.7 %) |
 | 5000 | 0 | 200 (99.9 %) | 200 (100 %) | 200 (100 %) |
 
@@ -350,7 +350,8 @@ the PM QoS columns:
   difference is 0.2-1.0 µs. So the cost is the core coming back from a deep C-state, not the
   executor. This PC's deepest state (C3) advertises a 350 µs exit latency.
 - **The poll loop does not spin a full core.** The `spin_some(0)` process used 0.08 cores, and
-  PM QoS also speeds it up, so it idles part of the time. Why was not traced. The blocking
+  PM QoS speeds it up at most sizes, so it idles part of the time. The 4 MiB host cells run about
+  7 µs higher in the PM QoS session for every transport, axon included. Why was not traced. The blocking
   variant used 0.001-0.02 cores.
 
 Raw data: `results/intra_rep.jsonl`, `results/intra_qos_rep.jsonl` (`"pm_qos_us":0` in the meta
@@ -369,7 +370,9 @@ instead of busy-polling, because 8 spinning consumers on this PC's 10 online CPU
 measuring the scheduler. `ros_loan` waits in an `rclcpp::WaitSet`, then makes a loaned take.
 axon waits in `TensorSubscriber::wait_for_update`. Both use the Fast DDS profile and the cell
 rules above. Both producers wait for N subscribers, then 500 ms, before the first frame. CPU
-is `getrusage` from each process's first frame to its last (5 s). The producer's CPU and that
+is `getrusage` from each process's first frame to its last (5 s). Every consumer, including
+the busy-polling default of the earlier tables, now calls `getrusage` once per frame after
+taking its timestamp, for that window. The producer's CPU and that
 of all its subscribers are added together. 3 runs, median; latency is the worst subscriber's
 p50/p99 in a run. Deep C-states held off (PM QoS 0):
 
@@ -388,7 +391,7 @@ p50/p99 in a run. Deep C-states held off (PM QoS 0):
 
 - **On the host, axon stays flat in N and ROS 2 grows slowly.** From 1 to 8 subscribers at
   147 KiB, ROS 2 goes from 8.6 to 19 µs and axon from 4.0 to 4.9 µs. From 1 MiB up, the
-  producer's payload copy dominates both. At N = 8 ROS 2 uses 2-5× the CPU of axon, mostly
+  producer's payload copy dominates both. At N = 8 ROS 2 uses 2-5.5× the CPU of axon, mostly
   in the subscribers.
 - **On the GPU, ROS 2's per-subscriber copy adds up.** Each ROS 2 subscriber copies the frame
   H2D itself. Latency grows from 154 to 450 µs, and CPU reaches a quarter core at N = 8. axon's
@@ -427,7 +430,9 @@ benchmarks/ros2_cpp/run_gated.sh pmqos         #   redone when another process u
   resident model is fine). The intra, fan-out and sync-cost runs above were made in units of
   one rep (one cell for fan-out). A sampler watched `nvidia-smi pmon` and `top` while each
   unit ran, and any unit during which another process used the SMs or more than 30 % of a
-  core was discarded and run again.
+  core was discarded and run again. The committed runs still used a filter that also ignored
+  `python3` and `node` processes on the GPU (fixed since in `run_gated.sh`). Their GPU cells
+  match the earlier gated sessions within run-to-run spread.
 
 - **This PC was unstable during part of the work.** Under heavy mixed load, physical cores 2-4 of the Ryzen 7 9800X3D crashed the kernel (13 panics since 2026-09-30). A ros2_cuda_ipc run made shortly before a panic measured 0.6-1 ms and was discarded. Everything in the GPU-transport comparison above was measured after offlining those cores (`0-1,5-9,13-15` online, recorded in the jsonl `meta` line). The earlier single-stream and multi-stream tables were measured with all 16 CPUs, in sessions that did not panic.
 

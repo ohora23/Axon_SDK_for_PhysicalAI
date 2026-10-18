@@ -61,6 +61,9 @@ struct SubResult {
     int torn = 0;
     std::vector<double> samples_us;
     double cpu_s = 0;
+    double cpu_window_s = 0;
+    double window_s = 0;
+    std::uint64_t first_seq = 0;  // seqno of the first frame counted (frames before it are setup)
 };
 
 static double percentile(std::vector<double> v, double p) {
@@ -116,15 +119,20 @@ static void sleep_until(std::uint64_t target_ns) {
 }
 
 static void print_sub_result(const char* transport, int bytes, int gpu, int frames_sent,
-                             const SubResult& res) {
+                              const SubResult& res) {
+    const char* wait_env = std::getenv("BENCH_WAIT");
+    int wait_on = wait_env && atoi(wait_env) ? 1 : 0;
+    const char* sub_id_env = std::getenv("BENCH_SUB_ID");
+    int sub_id = sub_id_env ? atoi(sub_id_env) : 0;
     std::fprintf(stdout,
-        "{\"role\":\"sub\",\"transport\":\"%s\",\"bytes\":%d,\"gpu\":%d,\"frames_sent\":%d,\"frames_seen\":%d,\"torn\":%d,\"n\":%d,\"p50_us\":%.1f,\"p90_us\":%.1f,\"p99_us\":%.1f,\"max_us\":%.1f,\"mean_us\":%.1f,\"cpu_s\":%.4f}\n",
+        "{\"role\":\"sub\",\"transport\":\"%s\",\"bytes\":%d,\"gpu\":%d,\"frames_sent\":%d,\"frames_seen\":%d,\"torn\":%d,\"n\":%d,\"p50_us\":%.1f,\"p90_us\":%.1f,\"p99_us\":%.1f,\"max_us\":%.1f,\"mean_us\":%.1f,\"cpu_s\":%.4f,\"cpu_window_s\":%.4f,\"window_s\":%.4f,\"sub_id\":%d,\"wait\":%d,\"first_seq\":%llu}\n",
         transport, bytes, gpu, frames_sent, res.frames_seen, res.torn,
         (int)res.samples_us.size(),
         percentile(res.samples_us, 50), percentile(res.samples_us, 90),
         percentile(res.samples_us, 99),
         res.samples_us.empty() ? 0.0 : *std::max_element(res.samples_us.begin(), res.samples_us.end()),
-        mean_val(res.samples_us), res.cpu_s);
+        mean_val(res.samples_us), res.cpu_s, res.cpu_window_s, res.window_s,
+        sub_id, wait_on, (unsigned long long)res.first_seq);
     std::fflush(stdout);
 }
 
@@ -137,8 +145,12 @@ static int run_pub_ros_dyn(int bytes, int frames, int rate_hz, int gpu) {
         "/axon_bench",
         rclcpp::QoS(rclcpp::KeepLast(1)).best_effort().durability_volatile());
 
+    const char* nsubs_env = std::getenv("BENCH_NSUBS");
+    int nsubs = nsubs_env ? atoi(nsubs_env) : 1;
+    if (nsubs < 1) nsubs = 1;
+
     auto start_wait = std::chrono::steady_clock::now();
-    while (pub->get_subscription_count() < 1) {
+    while (pub->get_subscription_count() < nsubs) {
         if (std::chrono::steady_clock::now() - start_wait > std::chrono::seconds(10)) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
@@ -177,8 +189,8 @@ static int run_pub_ros_dyn(int bytes, int frames, int rate_hz, int gpu) {
     double cpu1 = cpu_seconds();
 
     std::fprintf(stdout,
-        "{\"role\":\"pub\",\"transport\":\"ros_dyn\",\"bytes\":%d,\"gpu\":%d,\"frames\":%d,\"cpu_s\":%.4f,\"wall_s\":%.4f}\n",
-        bytes, gpu, frames, cpu1 - cpu0, wall_s);
+        "{\"role\":\"pub\",\"transport\":\"ros_dyn\",\"bytes\":%d,\"gpu\":%d,\"frames\":%d,\"cpu_s\":%.4f,\"wall_s\":%.4f,\"n_subs\":%d}\n",
+        bytes, gpu, frames, cpu1 - cpu0, wall_s, nsubs);
     std::fflush(stdout);
     rclcpp::shutdown();
     return 0;
@@ -188,7 +200,9 @@ static int run_pub_ros_dyn(int bytes, int frames, int rate_hz, int gpu) {
 static SubResult run_sub_ros_dyn(int bytes, int frames, int rate_hz, int gpu) {
     axon_bench::require_fits_shm_segment(bytes, "the UInt8MultiArray payload");
     rclcpp::init(0, nullptr);
-    auto node = rclcpp::Node::make_shared("bench_sub");
+    char name[64];
+    snprintf(name, sizeof(name), "bench_sub_%d", (int)getpid());
+    auto node = rclcpp::Node::make_shared(name);
 
     std_msgs::msg::UInt8MultiArray msg;
     rclcpp::MessageInfo info;
@@ -205,6 +219,8 @@ static SubResult run_sub_ros_dyn(int bytes, int frames, int rate_hz, int gpu) {
 
     auto start = std::chrono::steady_clock::now();
     double deadline = 10.0 + frames * (2.0 / rate_hz);
+    double cpu_first = 0;
+    std::uint64_t wall_first = 0;
 
     if (gpu == 1) {
         init_cuda_ctx();
@@ -223,6 +239,11 @@ static SubResult run_sub_ros_dyn(int bytes, int frames, int rate_hz, int gpu) {
                 std::memcpy(&t0, msg_buf.data.data(), 8);
                 if (head_seq > last_seqno) {
                     ++seen;
+                    if (seen == 1) {
+                        res.first_seq = head_seq;
+                        cpu_first = cpu_seconds();
+                        wall_first = axon::rt_now_ns();
+                    }
                     if (seen > 20) latencies.push_back((now - t0) / 1000.0);
                     last_seqno = head_seq;
                 }
@@ -241,6 +262,11 @@ static SubResult run_sub_ros_dyn(int bytes, int frames, int rate_hz, int gpu) {
                 std::memcpy(&t0, msg.data.data(), 8);
                 if (head_seq > last_seqno) {
                     ++seen;
+                    if (seen == 1) {
+                        res.first_seq = head_seq;
+                        cpu_first = cpu_seconds();
+                        wall_first = axon::rt_now_ns();
+                    }
                     if (seen > 20) latencies.push_back((now - t0) / 1000.0);
                     last_seqno = head_seq;
                 }
@@ -251,6 +277,10 @@ static SubResult run_sub_ros_dyn(int bytes, int frames, int rate_hz, int gpu) {
 
     res.frames_seen = seen;
     res.cpu_s = cpu_seconds();
+    if (seen >= 1) {
+        res.cpu_window_s = cpu_seconds() - cpu_first;
+        res.window_s = (axon::rt_now_ns() - wall_first) / 1e9;
+    }
     res.samples_us = std::move(latencies);
     print_sub_result("ros_dyn", bytes, gpu, frames, res);
     rclcpp::shutdown();
@@ -269,8 +299,12 @@ static int run_pub_ros_loan(int bytes, int frames, int rate_hz, int gpu) {
     bool can_loan = pub->can_loan_messages();
     std::fprintf(stderr, "can_loan_messages=%d\n", can_loan ? 1 : 0);
 
+    const char* nsubs_env = std::getenv("BENCH_NSUBS");
+    int nsubs = nsubs_env ? atoi(nsubs_env) : 1;
+    if (nsubs < 1) nsubs = 1;
+
     auto start_wait = std::chrono::steady_clock::now();
-    while (pub->get_subscription_count() < 1) {
+    while (pub->get_subscription_count() < nsubs) {
         if (std::chrono::steady_clock::now() - start_wait > std::chrono::seconds(10)) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
@@ -307,8 +341,8 @@ static int run_pub_ros_loan(int bytes, int frames, int rate_hz, int gpu) {
     double cpu1 = cpu_seconds();
 
     std::fprintf(stdout,
-        "{\"role\":\"pub\",\"transport\":\"ros_loan\",\"bytes\":%d,\"gpu\":%d,\"frames\":%d,\"cpu_s\":%.4f,\"wall_s\":%.4f}\n",
-        bytes, gpu, frames, cpu1 - cpu0, wall_s);
+        "{\"role\":\"pub\",\"transport\":\"ros_loan\",\"bytes\":%d,\"gpu\":%d,\"frames\":%d,\"cpu_s\":%.4f,\"wall_s\":%.4f,\"n_subs\":%d}\n",
+        bytes, gpu, frames, cpu1 - cpu0, wall_s, nsubs);
     std::fflush(stdout);
     rclcpp::shutdown();
     return 0;
@@ -318,7 +352,9 @@ static int run_pub_ros_loan(int bytes, int frames, int rate_hz, int gpu) {
 template<typename MsgT>
 static SubResult run_sub_ros_loan(int bytes, int frames, int rate_hz, int gpu) {
     rclcpp::init(0, nullptr);
-    auto node = rclcpp::Node::make_shared("bench_sub");
+    char name[64];
+    snprintf(name, sizeof(name), "bench_sub_%d", (int)getpid());
+    auto node = rclcpp::Node::make_shared(name);
     auto sub = node->create_subscription<MsgT>(
         "/axon_bench",
         rclcpp::QoS(rclcpp::KeepLast(1)).best_effort().durability_volatile(),
@@ -331,6 +367,9 @@ static SubResult run_sub_ros_loan(int bytes, int frames, int rate_hz, int gpu) {
     }
     std::fprintf(stderr, "can_loan_messages=1\n");
 
+    const char* wait_env = std::getenv("BENCH_WAIT");
+    int wait_on = wait_env && atoi(wait_env) ? 1 : 0;
+
     SubResult res;
     std::uint64_t last_seqno = 0;
     std::vector<double> latencies;
@@ -338,14 +377,26 @@ static SubResult run_sub_ros_loan(int bytes, int frames, int rate_hz, int gpu) {
 
     auto start = std::chrono::steady_clock::now();
     double deadline = 10.0 + frames * (2.0 / rate_hz);
+    double cpu_first = 0;
+    std::uint64_t wall_first = 0;
 
     CUdeviceptr d_dst = 0;
     if (gpu == 1) {
         init_cuda_ctx();
         check_cuda(cuMemAlloc(&d_dst, bytes), "cuMemAlloc dst");
     }
+
+    rclcpp::WaitSet ws;
+    if (wait_on) {
+        ws.add_subscription(sub);
+    }
+
     rcl_subscription_t* handle = sub->get_subscription_handle().get();
     while ((std::chrono::steady_clock::now() - start).count() / 1e9 < deadline) {
+        if (wait_on) {
+            auto wr = ws.wait(std::chrono::milliseconds(100));
+            if (wr.kind() != rclcpp::WaitResultKind::Ready) continue;
+        }
         void* loaned = nullptr;
         rmw_message_info_t info = rmw_get_zero_initialized_message_info();
         if (rcl_take_loaned_message(handle, &loaned, &info, nullptr) == RCL_RET_OK) {
@@ -362,6 +413,11 @@ static SubResult run_sub_ros_loan(int bytes, int frames, int rate_hz, int gpu) {
             std::memcpy(&t0, msg.data.data(), 8);
             if (head_seq > last_seqno) {
                 ++seen;
+                if (seen == 1) {
+                    res.first_seq = head_seq;
+                    cpu_first = cpu_seconds();
+                    wall_first = axon::rt_now_ns();
+                }
                 if (seen > 20) latencies.push_back((now - t0) / 1000.0);
                 last_seqno = head_seq;
             }
@@ -376,6 +432,10 @@ static SubResult run_sub_ros_loan(int bytes, int frames, int rate_hz, int gpu) {
 
     res.frames_seen = seen;
     res.cpu_s = cpu_seconds();
+    if (seen >= 1) {
+        res.cpu_window_s = cpu_seconds() - cpu_first;
+        res.window_s = (axon::rt_now_ns() - wall_first) / 1e9;
+    }
     res.samples_us = std::move(latencies);
     print_sub_result("ros_loan", bytes, gpu, frames, res);
     rclcpp::shutdown();
@@ -446,9 +506,13 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
     double wall_s = (tv1.tv_sec - tv0.tv_sec) + (tv1.tv_usec - tv0.tv_usec) * 1e-6;
     double cpu1 = cpu_seconds();
 
+    const char* nsubs_env = std::getenv("BENCH_NSUBS");
+    int nsubs = nsubs_env ? atoi(nsubs_env) : 1;
+    if (nsubs < 1) nsubs = 1;
+
     std::fprintf(stdout,
-        "{\"role\":\"pub\",\"transport\":\"axon\",\"bytes\":%d,\"gpu\":%d,\"frames\":%d,\"cpu_s\":%.4f,\"wall_s\":%.4f}\n",
-        bytes, gpu, frames, cpu1 - cpu0, wall_s);
+        "{\"role\":\"pub\",\"transport\":\"axon\",\"bytes\":%d,\"gpu\":%d,\"frames\":%d,\"cpu_s\":%.4f,\"wall_s\":%.4f,\"n_subs\":%d}\n",
+        bytes, gpu, frames, cpu1 - cpu0, wall_s, nsubs);
     std::fflush(stdout);
     return 0;
 }
@@ -458,6 +522,9 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
     SubResult res;
 
     if (gpu == 1) init_cuda_ctx();
+
+    const char* wait_env = std::getenv("BENCH_WAIT");
+    int wait_on = wait_env && atoi(wait_env) ? 1 : 0;
 
     auto sub = TensorSubscriber::create("bench/axon");
     int rc = sub->wait_handshake(15000);
@@ -475,9 +542,15 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
 
     auto start = std::chrono::steady_clock::now();
     double deadline = 10.0 + frames * (2.0 / rate_hz);
+    double cpu_first = 0;
+    std::uint64_t wall_first = 0;
 
     if (gpu == 0) {
         while ((std::chrono::steady_clock::now() - start).count() / 1e9 < deadline) {
+            if (wait_on) {
+                int r = sub->wait_for_update(100);
+                if (r <= 0) continue;
+            }
             auto v = sub->latest_view(8);
             if (v && v->seqno > last_seqno && v->data != nullptr) {
                 std::uint64_t now = axon::rt_now_ns();
@@ -488,6 +561,11 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
                 std::memcpy(&t0, v->data, 8);
                 if (head_seq > last_seqno) {
                     ++seen;
+                    if (seen == 1) {
+                        res.first_seq = head_seq;
+                        cpu_first = cpu_seconds();
+                        wall_first = axon::rt_now_ns();
+                    }
                     if (seen > 20) latencies.push_back((now - t0) / 1000.0);
                     last_seqno = head_seq;
                 }
@@ -497,6 +575,10 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
     } else {
         if (gpu == 1) init_cuda_ctx();
         while ((std::chrono::steady_clock::now() - start).count() / 1e9 < deadline) {
+            if (wait_on) {
+                int r = sub->wait_for_update(100);
+                if (r <= 0) continue;
+            }
             auto v = sub->latest_view(8);
             if (v && v->seqno > last_seqno && v->device_ptr != nullptr) {
                 uint8_t hdr[16];
@@ -514,6 +596,11 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
                 if (head_seq != tail_seq) { ++res.torn; continue; }  // not timed, as in the other cells
                 if (head_seq > last_seqno) {
                     ++seen;
+                    if (seen == 1) {
+                        res.first_seq = head_seq;
+                        cpu_first = cpu_seconds();
+                        wall_first = axon::rt_now_ns();
+                    }
                     if (seen > 20) latencies.push_back((now - t0) / 1000.0);
                     last_seqno = head_seq;
                 }
@@ -524,6 +611,10 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
 
     res.frames_seen = seen;
     res.cpu_s = cpu_seconds();
+    if (seen >= 1) {
+        res.cpu_window_s = cpu_seconds() - cpu_first;
+        res.window_s = (axon::rt_now_ns() - wall_first) / 1e9;
+    }
     res.samples_us = std::move(latencies);
     print_sub_result("axon", bytes, gpu, frames, res);
     return res;

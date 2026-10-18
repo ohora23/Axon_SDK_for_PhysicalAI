@@ -56,7 +56,9 @@ Green = payload, referenced in place and never copied. Blue = the only thing tha
 | What | Result |
 |---|---|
 | GPU → GPU across processes, 4 MiB (vs ROS 2 loaned messages + data-sharing, C++) | **19× lower** latency (26 µs vs 485 µs) |
-| GPU → GPU vs the GPU-sharing ROS 2 transports (official `rosidl::Buffer` CUDA backend, ros2_cuda_ipc) | **~5× lower** (≈25 µs vs ≈125 µs at any size); the producer host-syncs instead of handing off a CUDA IPC event |
+| GPU → GPU vs the GPU-sharing ROS 2 transports (official `rosidl::Buffer` CUDA backend, ros2_cuda_ipc) | **~5× lower** by default (≈25 µs vs ≈125 µs at any size), **~1.5×** with CUDA MPS (≈25 vs 35-42 µs). Without MPS most of the gap is the GPU switching between the processes' contexts; axon's consumer here only copies 24 B back, and a consumer kernel would pay that switch too |
+| Across processes vs ROS 2 **inside one process** (intra-process `unique_ptr` / type adapter) | **4-5 µs faster** in every cell (e.g. GPU 23 vs 28 µs, host 1 MiB 15 vs 20 µs), so composing nodes into one process buys no latency over axon |
+| 1 → 8 subscribers, GPU 1 MiB (event-driven consumers, deep C-states off) | **25 → 39 µs** vs 156 → 450 µs; producer and all subscribers together 0.009 vs 0.26 cores |
 | Host → host, 1 MiB (same comparison) | **2.4× lower** (15 µs vs 36 µs); 1.4× at 4 MiB |
 | Multi-stream robot workload @ 297 MB/s (same comparison, event-driven consumer) | camera p50 **29 vs 44 µs**, **half the CPU** (0.019 vs 0.038 cores), 2.8× fewer cache-misses, every frame delivered |
 | RT loop page faults | **0 / frame** |
@@ -94,8 +96,8 @@ occupy:
 | Solution | GPU zero-copy across procs | Coupling | Delivery model |
 |---|---|---|---|
 | **axon** | ✅ (CUDA VMM, ~25 µs GPU→GPU) | **none** — `device_ptr` / CAI | **latest-value-wins, bounded staleness** |
-| ROS 2 `rosidl::Buffer` CUDA backend (Lyrical) | ✅ (~124 µs GPU→GPU) | ROS 2 Lyrical+ | ROS pub/sub |
-| ros2_cuda_ipc | ✅ (~125 µs GPU→GPU) | ROS 2 | ROS pub/sub |
+| ROS 2 `rosidl::Buffer` CUDA backend (Lyrical) | ✅ (~124 µs GPU→GPU, ~42 µs with MPS) | ROS 2 Lyrical+ | ROS pub/sub |
+| ros2_cuda_ipc | ✅ (~125 µs GPU→GPU, ~37 µs with MPS) | ROS 2 | ROS pub/sub |
 | NVIDIA Isaac ROS / NITROS | ✅ | ROS 2 + NVIDIA | ROS pub/sub |
 | NVIDIA DeepStream | ✅ | GStreamer + NVIDIA | pipeline / queue |
 | Iceoryx2 / eCAL | ❌ host SHM only | none | queue |

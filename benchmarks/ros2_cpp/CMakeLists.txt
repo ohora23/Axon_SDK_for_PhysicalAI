@@ -81,8 +81,38 @@ else()
   message(STATUS "ros2_cuda_ipc not found: skipping cudaipc_bench")
 endif()
 
+# --- intra-process zero-copy benchmark ---
+add_executable(intra src/intra.cpp)
+
+target_include_directories(intra PRIVATE
+  ${AXON_ROOT}/include
+)
+
+target_compile_features(intra PRIVATE cxx_std_20)
+target_compile_definitions(intra PRIVATE AXON_WITH_CUDA=1)
+
+ament_target_dependencies(intra
+  rclcpp
+  std_msgs
+)
+
+target_link_libraries(intra ${cpp_typesupport_target} ${AXON_LIB} CUDA::cuda_driver rt pthread)
+
+# --- producer host-sync cost and GPU-side IPC event wait (CUDA kernels, needs nvcc) ---
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+  enable_language(CUDA)
+  add_executable(sync_cost src/sync_cost.cu)
+  set_target_properties(sync_cost PROPERTIES CUDA_ARCHITECTURES native)
+  target_link_libraries(sync_cost CUDA::cudart)
+  install(TARGETS sync_cost DESTINATION lib/${PROJECT_NAME})
+else()
+  message(STATUS "nvcc not found: skipping sync_cost")
+endif()
+
 # Install
-install(TARGETS bench mstream
+install(TARGETS bench mstream intra
   DESTINATION lib/${PROJECT_NAME}
 )
 

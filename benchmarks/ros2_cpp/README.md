@@ -91,15 +91,21 @@ not ask for.
 - `acceptable_buffer_backends="cuda"`.
 
 Every frame was checked to have arrived on the `cuda` backend (`get_backend_type()`), with 0
-CPU fallbacks. 500 frames at 100 Hz, 3 runs, p50 µs (median):
+CPU fallbacks. 500 frames at 100 Hz, 3 runs, p50 µs (median). The GPU runs in its default
+mode first, where each process has its own GPU context, then with **CUDA MPS** (one shared
+context; see [Why the gap shrinks with MPS](#why-the-gap-shrinks-with-mps)):
 
 | payload | ROS 2 loaned + data-sharing | `rosidl_buffer` (official) | `cudaipc` | **axon** |
 |---|---|---|---|---|
 | 147 KiB | 46 | 123 | 124 | **24** |
 | 1 MiB | 162 | 124 | 124 | **24** |
 | 4 MiB | 484 | 124 | 127 | **26** |
+| *with MPS:* 147 KiB | 41 | 42 | 39 | **24** |
+| *with MPS:* 1 MiB | 169 | 42 | 37 | **24** |
+| *with MPS:* 4 MiB | 479 | 42 | 35 | **25** |
 
-All cells delivered 500/500 frames with 0 torn.
+All cells delivered 500/500 frames with 0 torn. **Without MPS, axon is about 5× faster than the
+GPU-sharing ROS 2 transports; with MPS, about 1.5×.**
 
 - **p99:** for the three GPU-sharing transports, the median p99 is 10-17 µs above p50. The
   worst single run was `rosidl_buffer` at 4 MiB, with a p99 of 187 µs.
@@ -108,6 +114,10 @@ All cells delivered 500/500 frames with 0 torn.
 - **Raw data:** `results/cudaipc_rep.jsonl` holds cudaipc, axon and ros_loan from one
   session, with per-stage timings, a host-synced cudaipc pass and the probe.
   `results/rosidl_buffer_rep.jsonl` holds the container run, with its own probe and versions.
+  The MPS runs are `results/cudaipc_mps_rep.jsonl` and `results/rosidl_buffer_mps_rep.jsonl`
+  (`"mps":1` in the meta line), measured 2026-10-19 on the same 10 CPUs. They come from
+  `run_cudaipc.sh` and the container run under MPS (commands below), with the meta line tagged.
+  `results/sync_cost_mps_rep.jsonl` is `sync_cost ipcwait` under MPS.
 
 **Where the ~100 µs goes.** `rosidl_buffer` and `cudaipc` both share the buffer and stay flat
 in size, beating ROS 2's host-memory zero-copy above 1 MiB. Per stage for `cudaipc`, median
@@ -116,7 +126,7 @@ over the three sizes, recorded in the jsonl:
 - **t0 until the descriptor arrives over DDS:** 24-32 µs. This includes the producer
   queueing its GPU copies.
 - **`read()`:** 2 µs. The import is cached.
-- **CUDA IPC event wait, 24 B readback and stream sync:** 90-102 µs.
+- **CUDA IPC event wait, 24 B readback and stream sync:** 90-106 µs.
 
 Two checks isolate the event wait:
 
@@ -127,19 +137,97 @@ Two checks isolate the event wait:
   **61-72 µs p50** across runs. An empty stream costs 0.3 µs. The value is the same on the
   host and inside the Lyrical container.
 
-The readback is the same rule in every cell, but a consumer that never host-syncs, and only
-queues more GPU work behind the event, would hide part of that wait.
+### Why the gap shrinks with MPS
 
-axon avoids both costs. Its descriptor goes through a shared-memory seqlock, not DDS, and its
-producer **host-synchronizes before publishing**, so the consumer never waits on an event.
-That is a real trade-off, not a free win. The producer thread blocks until its GPU work is
-done, which costs a pipeline that wants to keep queueing GPU work behind the publish. The
-event-based designs let the producer run ahead. They also keep a frame alive while a
-consumer holds it, where axon is latest-value-wins. ros2_cuda_ipc additionally does
-not reuse a block for 100 ms after publishing it, so it needs `rate × 0.1 s` blocks: 16 here,
-against axon's 4.
+Most likely, that 60-70 µs is not the event itself but the GPU switching from the producer's
+context to the consumer's. [`src/sync_cost.cu`](src/sync_cost.cu) `ipcwait` measures it on
+the GPU clock (`%globaltimer`, which ticks in 256 ns steps on this GPU, hence the repeated
+values). The interval runs from the end of a 300 µs producer kernel to the start of the
+consumer's next kernel, in another process. 3 runs, p50 µs:
+
+| handoff | default (a context per process) | with MPS |
+|---|---|---|
+| consumer `cudaStreamWaitEvent` on the producer's IPC event, enqueued while it is still pending | 58.9 | 5.6 |
+| no event (axon's pattern, stand-in): producer host-syncs, tells the consumer over a pipe, the consumer launches | 62-72 | 8.5-17.4 |
+| the same two streams in **one** process, normal event / host-sync | 1.3 / 4.9 | (same) |
+
+The consumer's `cudaStreamWaitEvent` call returns in 1.2-1.6 µs, so a consumer can wait on the
+GPU without blocking its thread. But without MPS the GPU still needs about 60 µs before the
+consumer's work runs, with or without an event. MPS also changes how IPC events are handled,
+so this does not prove the event costs nothing, but the event-free row pays the same. In the
+cudaipc cell with MPS, the event wait, readback and sync stage falls from 90-106 µs to 5 µs. What remains is the 28-33 µs of the
+descriptor travelling over DDS, which axon does not pay.
+
+This changes what the headline means:
+
+- **axon's 24-26 µs is the time to the consumer's 24 B readback, a copy.** The copy did not pay
+  the context switch here, with or without MPS. A consumer that *launches a kernel* on the
+  frame will most likely pay it with axon too, as the event-free row does: about 60-70 µs
+  without MPS, and 8-17 µs with it. That row includes the pipe and the consumer's wake-up. It
+  was measured with a pipe, not through axon.
+- **With MPS, the GPU-sharing ROS 2 transports land at 35-42 µs**, about 1.5× axon. The
+  remaining difference is the DDS descriptor.
+- MPS is not the default. It runs one server per user, so containers must run as the same
+  user and share its pipe directory. Every client shares one GPU context, so a fault in one
+  client hits the others. Use it where that isolation trade-off is acceptable, which is often
+  the case on a dedicated robot computer.
 
 ```bash
+# MPS as a normal user (no sudo); run the benchmarks in the same shell, then `echo quit | nvidia-cuda-mps-control`
+export CUDA_MPS_PIPE_DIRECTORY=$HOME/mps-pipe CUDA_MPS_LOG_DIRECTORY=$HOME/mps-log
+mkdir -p $CUDA_MPS_PIPE_DIRECTORY $CUDA_MPS_LOG_DIRECTORY && nvidia-cuda-mps-control -d
+# the Lyrical container then needs: --user "$(id -u):$(id -g)" -v $CUDA_MPS_PIPE_DIRECTORY:/mps-pipe -e CUDA_MPS_PIPE_DIRECTORY=/mps-pipe
+# (and -v for lyrical/run.sh and fastdds_zero_copy.xml, which the image keeps root-only)
+```
+
+### The producer's host-sync
+
+axon avoids both costs in this cell. Its descriptor goes through a shared-memory seqlock, not
+DDS, and its producer **host-synchronizes before publishing**, so the consumer never waits on
+an event. The producer thread blocks until its GPU work is done. `sync_cost pipeline`
+measures what that costs a producer that runs back to back: CPU work (`C`, e.g. preparing the
+next input), a GPU kernel (`K`, the "inference"), then a 1 MiB copy into a 4-deep ring. Three
+producers:
+
+- `sync_naive`: enqueue frame *i*, `cudaStreamSynchronize`, publish *i*, then the CPU work for *i+1*.
+- `sync_pipelined`: CPU work, enqueue *i*, `cudaEventSynchronize` on *i−1*, publish *i−1*. Still
+  axon's rule (only complete frames are published), but the GPU always has the next frame queued.
+- `event`: CPU work, enqueue *i*, record an event, publish *i* at once, as the event-based
+  transports do; the producer waits only for the ring slot it is about to overwrite.
+
+GPU start and end of every frame are stamped with `%globaltimer`. 2000 frames (400 for
+K ≥ 1 ms), 3 runs, median:
+
+| K µs | C µs | `sync_naive` frames/s (GPU busy) | `sync_pipelined` | `event` |
+|---|---|---|---|---|
+| 50 | 0 | 17,627 (91.5 %) | 18,973 (98.5 %) | 18,836 (97.8 %) |
+| 50 | 50 | 9,346 (48.5 %) | 18,277 (94.9 %) | 18,301 (95.1 %) |
+| 200 | 0 | 4,837 (97.7 %) | 4,934 (99.6 %) | 4,924 (99.4 %) |
+| 200 | 200 | 2,457 (49.6 %) | 4,881 (98.6 %) | 4,883 (98.6 %) |
+| 1000 | 1000 | 498 (50.0 %) | 993 (99.7 %) | 993 (99.7 %) |
+| 5000 | 0 | 200 (99.9 %) | 200 (100 %) | 200 (100 %) |
+
+- **A naive host-sync idles the GPU about 5 µs per frame** (the wake-up and the next launch). That
+  costs 7 % of throughput at a 50 µs kernel and nothing measurable from 1 ms up.
+- **It halves throughput when the producer also has CPU work**, because the CPU and GPU stages
+  then run one after the other.
+- **Pipelining the sync removes the loss**: `sync_pipelined` matches `event` in every row. The
+  price is latency. Frame *i−1* is published after the CPU work for frame *i*, so up to
+  `max(0, C − K)` later than it completed, plus the wake-up.
+- **With axon's API, fill the descriptor right before each `publish()`.** The pipelined
+  producer above uses no transport. `acquire_descriptor()` returns one shared staging
+  descriptor and clears it on every call. So a producer that acquires frame *i* before
+  publishing frame *i−1* must fill frame *i−1*'s fields after that acquire. The buffer index
+  stays in each `AcquiredDescriptor`. This pattern was not run through axon here.
+
+So the host-sync is a constraint on how the producer is written, not a throughput ceiling.
+The event-based designs still let the producer run ahead without that restructuring. They
+also keep a frame alive while a consumer holds it, where axon is latest-value-wins.
+ros2_cuda_ipc additionally does not reuse a block for 100 ms after publishing it, so it needs
+`rate × 0.1 s` blocks: 16 here, against axon's 4.
+
+```bash
+benchmarks/ros2_cpp/run_sync_cost.sh 2000 3    # producer host-sync cost + ipcwait; refuses if another process uses the GPU
 benchmarks/ros2_cpp/run_cudaipc.sh 500 100 3   # cudaipc, axon, ros_loan; needs ros2_cuda_ipc built
 docker build -t axon-bench-lyrical -f benchmarks/ros2_cpp/lyrical/Dockerfile benchmarks/ros2_cpp
 docker run --rm --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
@@ -205,7 +293,7 @@ What this says:
 - **None of the transports is flat in bandwidth:** from scale 1 to 4, axon goes from 0.007 to 0.015 cores (the
   producer's payload writes), `ros_loan` from 0.031 to 0.038, `ros_dyn` from 0.038 to 0.077. Run-to-run spread for the
   ROS 2 cells is up to ±30 %.
-- **Not covered:** consumers that read the whole frame, the EventsExecutor, intra-process composition, `rmw_zenoh`.
+- **Not covered:** consumers that read the whole frame, the EventsExecutor, `rmw_zenoh`. Intra-process ROS 2 and 1 → N fan-out are in the sections below.
 
 ```bash
 benchmarks/ros2_cpp/run_mstream.sh                 # 5 s per cell, scales 1-4
@@ -215,7 +303,136 @@ PERF=1 benchmarks/ros2_cpp/run_mstream.sh          # + cache misses and instruct
 `MSTREAM_DEBUG=1` prints per-stream counts from the consumer; `MSTREAM_STAGGER=1` spreads the first deadlines.
 Raw data: `results/ms_rep{1,2,3}.jsonl`.
 
+## Same process: ROS 2 intra-process against axon across processes
+
+Many ROS 2 systems avoid copies by putting the nodes in one process: a component container
+with intra-process communication. [`src/intra.cpp`](src/intra.cpp) measures that path. Two
+nodes run in one process with `use_intra_process_comms(true)`, and the consumer runs in a
+`SingleThreadedExecutor` on its own thread. A component container uses the same intra-process
+manager.
+
+- **Host:** every frame the producer allocates a `std::unique_ptr<Payload*>` with
+  `MessageInitialization::SKIP`, writes the payload once and publishes it. `t0` is taken
+  before the allocation, because a `unique_ptr` publish needs a fresh message every frame. The
+  single subscriber takes a `unique_ptr`, so ownership moves. Every frame was checked to arrive
+  at the address it was published from (`copied` = 0).
+- **GPU:** a REP-2007 type adapter (`GpuFrame{CUdeviceptr, bytes}` adapted to
+  `UInt8MultiArray`) carries only the device pointer. The producer host-syncs like axon's, and
+  the consumer reads the same 24 B back. The ROS conversion never ran (`converted` = 0).
+- `ros_intra_poll` loops on `spin_some(0)`; `ros_intra_wait` blocks in `spin()`. Otherwise the
+  same rules as above apply: 500 frames at 100 Hz, 3 runs, 500/500 delivered, 0 torn.
+
+p50 µs, median of 3. "PM QoS 0" is explained below. axon runs across two processes. Its
+busy-polling consumer (the default of `bench.cpp`) never idles, so it has one column. Its
+blocking consumer is the N = 1 cell of the fan-out tables, measured in the same session as
+the PM QoS columns:
+
+| payload | axon, spinning | `ros_intra_poll` | `ros_intra_wait` | `ros_intra_poll`, PM QoS 0 | `ros_intra_wait`, PM QoS 0 | axon blocking, PM QoS 0 |
+|---|---|---|---|---|---|---|
+| host 147 KiB | **3.1** | 8.6 | 79 | 4.8 | 5.8 | **4.0** |
+| host 1 MiB | **15.4** | 19.9 | 117 | 19.3 | 19.9 | **18.1** |
+| host 4 MiB | **58.8** | 63.2 | 243 | 70.7 | 70.9 | **69.6** |
+| GPU 147 KiB | **23.2** | 27.2 | 163 | 25.7 | 26.4 | |
+| GPU 1 MiB | **23.6** | 27.6 | 153 | 26.1 | 26.9 | **24.9** |
+| GPU 4 MiB | **25.4** | 29.6 | 155 | 28.1 | 28.5 | |
+
+- **axon across processes is not slower than ROS 2 inside one process.**
+  - Spinning axon vs the `spin_some(0)` loop: 4-5.5 µs faster in every cell.
+  - Both consumers blocking, with PM QoS 0: 1.3-2.0 µs faster.
+
+  So moving nodes into one process gives a ROS 2 system no latency advantage over axon, and
+  axon keeps the processes separate. A crash stays in its process, and each process can use its
+  own language, build and framework. Both paths copy the payload once on the producer (host),
+  or share one device buffer (GPU). Where the remaining µs go (executor dispatch, the
+  allocation) was not traced.
+- **On an idle machine, a blocking consumer pays 70-180 µs to wake.** The default
+  `ros_intra_wait` column is 70-180 µs above polling. With deep C-states held off (PM QoS 0) the
+  difference is 0.2-1.0 µs. So the cost is the core coming back from a deep C-state, not the
+  executor. This PC's deepest state (C3) advertises a 350 µs exit latency.
+- **The poll loop does not spin a full core.** The `spin_some(0)` process used 0.08 cores, and
+  PM QoS speeds it up at most sizes, so it idles part of the time. The 4 MiB host cells run about
+  7 µs higher in the PM QoS session for every transport, axon included. Why was not traced. The blocking
+  variant used 0.001-0.02 cores.
+
+Raw data: `results/intra_rep.jsonl`, `results/intra_qos_rep.jsonl` (`"pm_qos_us":0` in the meta
+line) and `results/intra_axon_ref.jsonl` (the spinning axon cells, same session as the default
+columns).
+
+**PM QoS 0** means that while the runner held `/dev/cpu_dma_latency` open with the value 0, the
+kernel kept every core out of C-states deeper than C1. Real-time robot computers usually do
+this, or disable deep C-states in the BIOS. On this Ubuntu install the device is writable by
+the `plugdev` group, so no sudo is needed, and the setting ends when the file is closed.
+
+## 1 → N fan-out
+
+One producer and N subscriber processes, for N = 1, 2, 4 and 8. Here every consumer **blocks**
+instead of busy-polling, because 8 spinning consumers on this PC's 10 online CPUs would end up
+measuring the scheduler. `ros_loan` waits in an `rclcpp::WaitSet`, then makes a loaned take.
+axon waits in `TensorSubscriber::wait_for_update`. Both use the Fast DDS profile and the cell
+rules above. Both producers wait for N subscribers, then 500 ms, before the first frame. CPU
+is `getrusage` from each process's first frame to its last (5 s). Every consumer, including
+the busy-polling default of the earlier tables, now calls `getrusage` once per frame after
+taking its timestamp, for that window. The producer's CPU and that
+of all its subscribers are added together. 3 runs, median; latency is the worst subscriber's
+p50/p99 in a run. Deep C-states held off (PM QoS 0):
+
+| cell | N | `ros_loan` p50 / p99 µs | **axon** p50 / p99 µs | `ros_loan` CPU (cores) | **axon** CPU |
+|---|---|---|---|---|---|
+| host 147 KiB | 1 | 8.6 / 28 | **4.0 / 8** | 0.0017 | **0.0007** |
+| | 8 | 19.1 / 45 | **4.9 / 11** | 0.0141 | **0.0026** |
+| host 1 MiB | 1 | 23.1 / 46 | **18.1 / 28** | 0.0033 | **0.0022** |
+| | 8 | 33.6 / 62 | **19.0 / 27** | 0.0155 | **0.0041** |
+| host 4 MiB | 1 | 73.3 / 99 | **69.6 / 91** | 0.0084 | **0.0076** |
+| | 8 | 85.1 / 115 | **69.9 / 92** | 0.0211 | **0.0095** |
+| GPU 1 MiB | 1 | 154.3 / 192 | **24.9 / 46** | 0.0167 | **0.0031** |
+| | 2 | 204.8 / 238 | **26.7 / 45** | 0.0340 | **0.0047** |
+| | 4 | 296.2 / 347 | **29.0 / 47** | 0.0959 | **0.0083** |
+| | 8 | 449.7 / 582 | **37.9 / 60** | 0.2564 | **0.0208** |
+
+- **On the host, axon stays flat in N and ROS 2 grows slowly.** From 1 to 8 subscribers at
+  147 KiB, ROS 2 goes from 8.6 to 19 µs and axon from 4.0 to 4.9 µs. From 1 MiB up, the
+  producer's payload copy dominates both. At N = 8 ROS 2 uses 2-5.5× the CPU of axon, mostly
+  in the subscribers.
+- **On the GPU, ROS 2's per-subscriber copy adds up.** Each ROS 2 subscriber copies the frame
+  H2D itself. Latency grows from 154 to 450 µs, and CPU reaches a quarter core at N = 8. axon's
+  subscribers import the same device buffer and grow from 25 to 38 µs, at 12× less CPU.
+- **Delivery:** every subscriber of both transports received 500/500 with `first_seq` = 1, 0 torn.
+
+With the default C-states, every blocking consumer pays the wake-up from a deep C-state. All
+latencies rise and the ranking stays the same (p50 µs, N = 1 → 8; CPU at N = 8):
+
+| cell | `ros_loan` | axon | CPU at N = 8, `ros_loan` / axon |
+|---|---|---|---|
+| host 147 KiB | 138 → 136 | 43 → 49 | 0.066 / 0.020 |
+| host 1 MiB | 171 → 172 | 81 → 86 | 0.067 / 0.023 |
+| host 4 MiB | 296 → 292 | 203 → 208 | 0.076 / 0.032 |
+| GPU 1 MiB | 329 → 549 | 134 → 145 | 0.320 / 0.053 |
+
+The ROS 2 path probably pays the wake-up more than once per frame: a Fast DDS thread is woken,
+and then the wait set. axon wakes the subscriber directly, with a futex in the shared slot.
+This was not traced.
+
+Raw data: `results/fanout_qos_rep.jsonl` and `results/fanout_rep.jsonl`. Each line is tagged
+with `fanout_n`; producer lines carry `n_subs`.
+
+```bash
+benchmarks/ros2_cpp/run_intra.sh 500 100 3     # same-process ROS 2 (intra.cpp), poll and wait
+benchmarks/ros2_cpp/run_fanout.sh 500 100 3    # 1 -> N; FANOUT_CELL=1:1048576 runs one cell
+benchmarks/ros2_cpp/run_gated.sh               # how the committed files were made: one unit at a time,
+benchmarks/ros2_cpp/run_gated.sh pmqos         #   redone when another process used the GPU or a core
+```
+
 ## Notes from setting it up
+
+- **Other work on the GPU or CPU invalidates a run.** During this work another process used
+  the GPU, and every kernel time-sliced against it: a 200 µs kernel took 840 µs from launch to
+  sync. `run_sync_cost.sh` refuses to start while another process uses the GPU's SMs (an idle
+  resident model is fine). The intra, fan-out and sync-cost runs above were made in units of
+  one rep (one cell for fan-out). A sampler watched `nvidia-smi pmon` and `top` while each
+  unit ran, and any unit during which another process used the SMs or more than 30 % of a
+  core was discarded and run again. The committed runs still used a filter that also ignored
+  `python3` and `node` processes on the GPU (fixed since in `run_gated.sh`). Their GPU cells
+  match the earlier gated sessions within run-to-run spread.
 
 - **This PC was unstable during part of the work.** Under heavy mixed load, physical cores 2-4 of the Ryzen 7 9800X3D crashed the kernel (13 panics since 2026-09-30). A ros2_cuda_ipc run made shortly before a panic measured 0.6-1 ms and was discarded. Everything in the GPU-transport comparison above was measured after offlining those cores (`0-1,5-9,13-15` online, recorded in the jsonl `meta` line). The earlier single-stream and multi-stream tables were measured with all 16 CPUs, in sessions that did not panic.
 

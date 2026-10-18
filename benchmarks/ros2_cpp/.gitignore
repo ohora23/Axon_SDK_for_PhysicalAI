@@ -7,3 +7,12 @@ results/*
 !results/ms_rep*.jsonl
 !results/cudaipc_rep.jsonl
 !results/rosidl_buffer_rep.jsonl
+!results/intra_rep.jsonl
+!results/intra_qos_rep.jsonl
+!results/intra_axon_ref.jsonl
+!results/fanout_rep.jsonl
+!results/fanout_qos_rep.jsonl
+!results/sync_cost_rep.jsonl
+!results/sync_cost_mps_rep.jsonl
+!results/cudaipc_mps_rep.jsonl
+!results/rosidl_buffer_mps_rep.jsonl

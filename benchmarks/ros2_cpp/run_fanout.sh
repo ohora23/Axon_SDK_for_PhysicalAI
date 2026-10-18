@@ -59,14 +59,9 @@ truncate -s 0 "$JSONL"
 # Meta line
 echo "{\"meta\":\"fanout\",\"date\":\"$(date -Is)\",\"cpus_online\":\"$(cat /sys/devices/system/cpu/online)\",\"frames\":$FRAMES,\"rate_hz\":$RATE,\"kernel\":\"$(uname -r)\",\"wait\":1}" >> "$JSONL"
 
-PIDS=()
 SUB_PIDS_ALL=()
 
 cleanup() {
-    for p in "${PIDS[@]}"; do
-        kill "$p" 2>/dev/null
-        wait "$p" 2>/dev/null
-    done
     for p in "${SUB_PIDS_ALL[@]}"; do
         kill "$p" 2>/dev/null
         wait "$p" 2>/dev/null
@@ -75,7 +70,6 @@ cleanup() {
 trap cleanup EXIT
 
 FAIL_COUNT=0
-ALL_RESULTS=""
 
 for gpu in "${GPUS[@]}"; do
     if [ "$gpu" -eq 0 ]; then
@@ -131,12 +125,9 @@ for gpu in "${GPUS[@]}"; do
                         # Insert rep and n after opening brace
                         PUB_MOD=$(echo "$PUB_LINE" | sed "s/{/{\"rep\":$rep,\"fanout_n\":$N,/")
                         echo "$PUB_MOD" >> "$JSONL"
-                        ALL_RESULTS="${ALL_RESULTS}${PUB_MOD}
-"
                     fi
 
                     # Wait for every subscriber pid and check results
-                    SUB_FAIL=0
                     for k in $(seq 0 $((N - 1))); do
                         wait ${SUB_PIDS[$k]}
                         SUB_RC=$?
@@ -145,7 +136,6 @@ for gpu in "${GPUS[@]}"; do
                         if [ $SUB_RC -ne 0 ] || [ -z "$SUB_JSON" ]; then
                             echo "[FAIL] subscriber $k exited $SUB_RC or no JSON (err: ${SUB_ERRS[$k]})"
                             echo "[FAIL] ${SUB_ERRS[$k]}"
-                            SUB_FAIL=1
                             FAIL_COUNT=$((FAIL_COUNT + 1))
                         fi
 
@@ -153,8 +143,6 @@ for gpu in "${GPUS[@]}"; do
                             # Insert rep and n after opening brace
                             SUB_MOD=$(echo "$SUB_JSON" | sed "s/{/{\"rep\":$rep,\"fanout_n\":$N,/")
                             echo "$SUB_MOD" >> "$JSONL"
-                            ALL_RESULTS="${ALL_RESULTS}${SUB_MOD}
-"
                         fi
                     done
                 done

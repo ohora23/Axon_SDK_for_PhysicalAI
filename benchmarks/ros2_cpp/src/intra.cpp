@@ -12,13 +12,11 @@
 #include <cmath>
 #include <atomic>
 #include <thread>
-#include <unistd.h>
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <time.h>
 
 #include <rclcpp/rclcpp.hpp>
-#include <rclcpp/executors.hpp>
 #include <std_msgs/msg/u_int8_multi_array.hpp>
 
 #include "axon_bench/msg/payload147_k.hpp"

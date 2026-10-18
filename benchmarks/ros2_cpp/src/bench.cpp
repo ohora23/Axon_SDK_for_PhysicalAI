@@ -66,6 +66,10 @@ struct SubResult {
     std::uint64_t first_seq = 0;  // seqno of the first frame counted (frames before it are setup)
 };
 
+// BENCH_NSUBS (default 1, at least 1) and BENCH_WAIT (opt-in blocking consumers) for the fan-out runs.
+static int env_nsubs() { const char* e = std::getenv("BENCH_NSUBS"); return e ? std::max(1, atoi(e)) : 1; }
+static bool env_wait() { const char* e = std::getenv("BENCH_WAIT"); return e && atoi(e); }
+
 static double percentile(std::vector<double> v, double p) {
     std::sort(v.begin(), v.end());
     if (v.empty()) return 0;
@@ -120,9 +124,7 @@ static void sleep_until(std::uint64_t target_ns) {
 
 static void print_sub_result(const char* transport, int bytes, int gpu, int frames_sent,
                               const SubResult& res) {
-    const char* wait_env = std::getenv("BENCH_WAIT");
-    // ros_dyn has no blocking variant
-    int wait_on = wait_env && atoi(wait_env) && std::strcmp(transport, "ros_dyn") != 0 ? 1 : 0;
+    const int wait_on = env_wait() && std::strcmp(transport, "ros_dyn") != 0 ? 1 : 0;  // ros_dyn never blocks
     const char* sub_id_env = std::getenv("BENCH_SUB_ID");
     int sub_id = sub_id_env ? atoi(sub_id_env) : 0;
     std::fprintf(stdout,
@@ -146,9 +148,7 @@ static int run_pub_ros_dyn(int bytes, int frames, int rate_hz, int gpu) {
         "/axon_bench",
         rclcpp::QoS(rclcpp::KeepLast(1)).best_effort().durability_volatile());
 
-    const char* nsubs_env = std::getenv("BENCH_NSUBS");
-    int nsubs = nsubs_env ? atoi(nsubs_env) : 1;
-    if (nsubs < 1) nsubs = 1;
+    const int nsubs = env_nsubs();
 
     auto start_wait = std::chrono::steady_clock::now();
     while (pub->get_subscription_count() < nsubs) {
@@ -305,9 +305,7 @@ static int run_pub_ros_loan(int bytes, int frames, int rate_hz, int gpu) {
     bool can_loan = pub->can_loan_messages();
     std::fprintf(stderr, "can_loan_messages=%d\n", can_loan ? 1 : 0);
 
-    const char* nsubs_env = std::getenv("BENCH_NSUBS");
-    int nsubs = nsubs_env ? atoi(nsubs_env) : 1;
-    if (nsubs < 1) nsubs = 1;
+    const int nsubs = env_nsubs();
 
     auto start_wait = std::chrono::steady_clock::now();
     while (pub->get_subscription_count() < nsubs) {
@@ -373,8 +371,7 @@ static SubResult run_sub_ros_loan(int bytes, int frames, int rate_hz, int gpu) {
     }
     std::fprintf(stderr, "can_loan_messages=1\n");
 
-    const char* wait_env = std::getenv("BENCH_WAIT");
-    int wait_on = wait_env && atoi(wait_env) ? 1 : 0;
+    const int wait_on = env_wait() ? 1 : 0;
 
     SubResult res;
     std::uint64_t last_seqno = 0;
@@ -464,8 +461,7 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
                          gpu == 1 ? PoolBackend::Accelerator : PoolBackend::Custom, nullptr});
     auto pub = TensorPublisher::create("bench/axon", *pool);
     // Like the ROS 2 producers: wait (up to 10 s) for BENCH_NSUBS subscribers, then 500 ms.
-    const char* nsubs_wait_env = std::getenv("BENCH_NSUBS");
-    const int nsubs_wait = nsubs_wait_env ? std::max(1, atoi(nsubs_wait_env)) : 1;
+    const int nsubs_wait = env_nsubs();
     int accepted = 0;
     const auto hs_start = std::chrono::steady_clock::now();
     while (accepted < nsubs_wait && std::chrono::steady_clock::now() - hs_start < std::chrono::seconds(10)) {
@@ -523,9 +519,7 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
     double wall_s = (tv1.tv_sec - tv0.tv_sec) + (tv1.tv_usec - tv0.tv_usec) * 1e-6;
     double cpu1 = cpu_seconds();
 
-    const char* nsubs_env = std::getenv("BENCH_NSUBS");
-    int nsubs = nsubs_env ? atoi(nsubs_env) : 1;
-    if (nsubs < 1) nsubs = 1;
+    const int nsubs = env_nsubs();
 
     std::fprintf(stdout,
         "{\"role\":\"pub\",\"transport\":\"axon\",\"bytes\":%d,\"gpu\":%d,\"frames\":%d,\"cpu_s\":%.4f,\"wall_s\":%.4f,\"n_subs\":%d}\n",
@@ -540,8 +534,7 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
 
     if (gpu == 1) init_cuda_ctx();
 
-    const char* wait_env = std::getenv("BENCH_WAIT");
-    int wait_on = wait_env && atoi(wait_env) ? 1 : 0;
+    const int wait_on = env_wait() ? 1 : 0;
 
     auto sub = TensorSubscriber::create("bench/axon");
     int rc = sub->wait_handshake(15000);

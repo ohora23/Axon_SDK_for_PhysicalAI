@@ -1,7 +1,7 @@
 # 다음 세션에서 이어서 작업하기
 
 > 본 문서는 Axon 작업을 다른 시점/세션에서 이어가기 위한 **현황 + 체크리스트 + 명령어 모음**입니다.
-> 마지막 갱신: 2026-10-15 (main = `d30cb33`, PR #46까지 머지 — Jetson 백엔드 완료, hermes-head를 Axon 전용 보드로 전환)
+> 마지막 갱신: 2026-10-15 (main = `c557103`, PR #47까지 머지 — Jetson 백엔드 완료, hermes-head를 Axon 전용 보드로 전환)
 
 ---
 
@@ -37,6 +37,7 @@
 | ROS2 | 같은 `axon_bridge` 위 descriptor-topic offload, Jazzy (평균 staleness ~160 µs, 90/90 frames) | #35 |
 | Jetson | `PoolBackend::NvBufSurface`: UVC 카메라 → pool 직접 캡처 → 다른 프로세스가 host view + CUDA 포인터로 수신, 복사 0. wire v4. AGX Xavier 실기 검증 | #36–#38 |
 | 공정 벤치 | C++ rclcpp로 ROS 2 zero-copy(loaned + Fast DDS data-sharing)와 비교 (`benchmarks/ros2_cpp/`): host 1 MiB 15 vs 36 µs, GPU→GPU 4 MiB 26 vs 485 µs, 다중스트림(297 MB/s) 카메라 p50 29 vs 44 µs·CPU 0.019 vs 0.038 cores. 기존 수치는 rclpy 대비였음 | #43, #44, #46 |
+| 경쟁 비교 | GPU→GPU를 ROS 2 공식 `rosidl::Buffer` CUDA 백엔드(Lyrical, Docker)와 ros2_cuda_ipc와 직접 비교: 둘 다 약 124 µs, axon 약 25 µs. 차이는 DDS descriptor(24~32 µs)와 소비자 측 CUDA IPC event 대기(61~72 µs). axon은 생산자가 host-sync하는 대가 | #47 |
 | 이벤트 대기 | `TensorSubscriber::wait_for_update` / `wait_any`(futex, `futex_waitv`), 크기 한도 위반 시 조용한 드롭 제거(`publish()` -1/EMSGSIZE, `create()` E2BIG, Python 예외) | #46 |
 
 ---
@@ -44,7 +45,9 @@
 ## 2. 남은 작업 (Next)
 
 - [ ] **PREEMPT_RT 커널에서 `cyclictest` 1 kHz jitter 측정** — **진행 중, 보드 다운**: 기준선(stock 커널) 최악 1,138 µs(무부하)/1,263 µs(부하). 직접 빌드한 `5.10.216-rt108-tegra`로 재부팅한 뒤 hermes-head가 응답하지 않음. 콘솔에서 부팅 메뉴 `primary kernel` 선택 → `/boot/extlinux/extlinux.conf`의 `DEFAULT`를 `primary`로 복구 → `journalctl -b -1`로 원인 확인. 빌드·설치·측정 스크립트: `instrumentation/jetson/rt/` (#42), 결과 문서 `docs/hardware-verification.md` §7. 빌드 산출물은 호스트 `~/z_Setup_NvidiaXavier/rt-kernel/`
-- [ ] **ROS Discourse 글 게시** — 초안은 #46 결과 기준으로 갱신 필요(사용자가 직접 게시)
+- [ ] **ROS Discourse 글 게시** — 초안을 #47 결과(공식 `rosidl::Buffer`·ros2_cuda_ipc 대비 5×, 생산자 host-sync 트레이드오프) 기준으로 다시 써야 함(사용자가 직접 게시)
+- [ ] **남은 경쟁 비교** — Iceoryx2, `rmw_zenoh` 공유 메모리(host 경로), NITROS
+- [ ] **개발 PC 주의** — 9800X3D 물리 코어 2~4 불량 의심, `cpu-offline-cores.service`로 CPU 2·3·4·10·11·12를 끈 상태. 벤치마크에 코어 상태를 기록할 것. CPU RMA 예정(Obsidian `Tasks/Hardware/CPU RMA 자료 …`)
 - [ ] **Jetson에서 `wait_any` 확인** — r35 커널 5.10에는 `futex_waitv`가 없어 100 µs 폴링으로 동작. 보드 복구 후 테스트
 - [ ] **AMD XDNA 백엔드** (`AXON_ENABLE_AMD_XDNA`) — 하드웨어 없음 (이 PC 9800X3D엔 NPU 없음)
 - [ ] **실제 로봇 통합** — 실 센서(UVC 웹캠)는 Jetson에서 검증 완료

@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>axon_bench_lyrical</name>
+  <version>0.0.1</version>
+  <description>GPU -> GPU latency over the ROS 2 Lyrical rosidl::Buffer CUDA backend, for the axon comparison</description>
+  <maintainer email="ohora23@gmail.com">ohora23</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>cuda_buffer</depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

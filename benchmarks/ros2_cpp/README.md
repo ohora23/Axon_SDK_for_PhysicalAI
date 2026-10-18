@@ -13,6 +13,7 @@ documented zero-copy path, so the numbers answer the question a ROS 2 user would
 | `ros_loan` | rclcpp **loaned messages** on a fixed-size type (`msg/Payload*.msg`) + **Fast DDS data-sharing**: ROS 2's zero-copy path |
 | `axon` | axon `TensorPublisher` / `TensorSubscriber`: Custom (memfd) pool on the host, Accelerator (CUDA VMM) pool on the GPU |
 | `axon_wait` | (multi-stream only) `axon`, with the consumer blocking in `TensorSubscriber::wait_any` instead of a 1 kHz loop |
+| `rosidl_buffer`, `cudaipc` | (GPU only) the official ROS 2 `rosidl::Buffer` CUDA backend and ros2_cuda_ipc; see [GPU → GPU against the other GPU zero-copy transports](#gpu--gpu-against-the-other-gpu-zero-copy-transports) |
 
 **Fast DDS profile.** Every ROS 2 cell runs with [`fastdds_zero_copy.xml`](fastdds_zero_copy.xml)
 (`RMW_FASTRTPS_USE_QOS_FROM_XML=1`): synchronous publishing, data-sharing where the type allows it,
@@ -67,6 +68,88 @@ in every cell.
 - **On the GPU, the gap is the two copies ROS 2 cannot avoid.** A ROS 2 message lives in host memory, so a GPU payload goes D2H, through the transport, then H2D: 485 µs at 4 MiB. axon passes the device buffer itself, and its latency stays at 24-26 µs whatever the size.
   The two copies here are pageable. Measured separately on this machine, a 4 MiB D2H + H2D pair takes 408 µs pageable and 230 µs pinned, so pinning the ROS 2 buffers would bring the 4 MiB cell to roughly 310 µs, still about 12× axon. Not measured inside the benchmark: the loan lives in the Fast DDS segment, and registering it with CUDA is not something a ROS 2 user would normally do.
 - **Not measured here:** NITROS / type adaptation, which keeps GPU buffers inside one process (composable nodes), and `rmw_zenoh` shared memory.
+
+## GPU → GPU against the other GPU zero-copy transports
+
+Two ROS 2 projects now share GPU memory between processes the way axon does (CUDA VMM
+allocations whose FDs cross a Unix socket), with only a descriptor on the topic:
+
+| transport | what it is |
+|---|---|
+| `rosidl_buffer` | the **official** ROS 2 Lyrical `rosidl::Buffer` CUDA backend ([ros2/rosidl_buffer_backends](https://github.com/ros2/rosidl_buffer_backends) `cuda_buffer_backend` 0.1.2): a `sensor_msgs/Image` whose `data` lives in CUDA VMM; the publisher's `WriteHandle` records a CUDA IPC event, and the subscriber's `ReadHandle` waits on it |
+| `cudaipc` | [dskkato/ros2_cuda_ipc](https://github.com/dskkato/ros2_cuda_ipc) v0.5 (MIT): the same design as a standalone library over Jazzy (`GpuImage` descriptor, a CUDA IPC event for completion, and a buffer reference held by each reader's `ReadHandle`) |
+
+Same GPU → GPU cell as above: the producer has the payload on the GPU, writes all of it plus
+the header and tail into the transport's buffer, the consumer readback stops the clock.
+Each transport is used the way its documentation shows. Both completion events and
+reader-held buffers are honoured, and nothing is host-synchronized that the library does
+not ask for.
+`rosidl_buffer` runs in the Lyrical container ([`lyrical/`](lyrical/)), with these settings:
+
+- Ubuntu 26.04 and Fast DDS 3.6.2, against Jazzy's 2.14 on the host.
+- The same `fastdds_zero_copy.xml`.
+- `acceptable_buffer_backends="cuda"`.
+
+Every frame was checked to have arrived on the `cuda` backend (`get_backend_type()`), with 0
+CPU fallbacks. 500 frames at 100 Hz, 3 runs, p50 µs (median):
+
+| payload | ROS 2 loaned + data-sharing | `rosidl_buffer` (official) | `cudaipc` | **axon** |
+|---|---|---|---|---|
+| 147 KiB | 46 | 123 | 124 | **24** |
+| 1 MiB | 162 | 124 | 124 | **24** |
+| 4 MiB | 484 | 124 | 127 | **26** |
+
+All cells delivered 500/500 frames with 0 torn.
+
+- **p99:** for the three GPU-sharing transports, the median p99 is 10-17 µs above p50. The
+  worst single run was `rosidl_buffer` at 4 MiB, with a p99 of 187 µs.
+- **When and how:** measured 2026-10-19 with 10 of 16 CPUs online (see the note on this PC
+  below). The `rosidl_buffer` cell ran in its container right after the host session.
+- **Raw data:** `results/cudaipc_rep.jsonl` holds cudaipc, axon and ros_loan from one
+  session, with per-stage timings, a host-synced cudaipc pass and the probe.
+  `results/rosidl_buffer_rep.jsonl` holds the container run, with its own probe and versions.
+
+**Where the ~100 µs goes.** `rosidl_buffer` and `cudaipc` both share the buffer and stay flat
+in size, beating ROS 2's host-memory zero-copy above 1 MiB. Per stage for `cudaipc`, median
+over the three sizes, recorded in the jsonl:
+
+- **t0 until the descriptor arrives over DDS:** 24-32 µs. This includes the producer
+  queueing its GPU copies.
+- **`read()`:** 2 µs. The import is cached.
+- **CUDA IPC event wait, 24 B readback and stream sync:** 90-102 µs.
+
+Two checks isolate the event wait:
+
+- **Producer host-synced first:** with the event already complete, the last stage still
+  takes 65 µs.
+- **[`src/ipc_event_probe.cpp`](src/ipc_event_probe.cpp), no library:** waiting on an
+  already-completed CUDA IPC event from another process, plus the stream sync, costs
+  **61-72 µs p50** across runs. An empty stream costs 0.3 µs. The value is the same on the
+  host and inside the Lyrical container.
+
+The readback is the same rule in every cell, but a consumer that never host-syncs, and only
+queues more GPU work behind the event, would hide part of that wait.
+
+axon avoids both costs. Its descriptor goes through a shared-memory seqlock, not DDS, and its
+producer **host-synchronizes before publishing**, so the consumer never waits on an event.
+That is a real trade-off, not a free win. The producer thread blocks until its GPU work is
+done, which costs a pipeline that wants to keep queueing GPU work behind the publish. The
+event-based designs let the producer run ahead. They also keep a frame alive while a
+consumer holds it, where axon is latest-value-wins. ros2_cuda_ipc additionally does
+not reuse a block for 100 ms after publishing it, so it needs `rate × 0.1 s` blocks: 16 here,
+against axon's 4.
+
+```bash
+benchmarks/ros2_cpp/run_cudaipc.sh 500 100 3   # cudaipc, axon, ros_loan; needs ros2_cuda_ipc built
+docker build -t axon-bench-lyrical -f benchmarks/ros2_cpp/lyrical/Dockerfile benchmarks/ros2_cpp
+docker run --rm --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    --ipc=host --pid=host axon-bench-lyrical  # rosidl::Buffer, plus the IPC event probe
+```
+
+ros2_cuda_ipc is built separately (`git clone https://github.com/dskkato/ros2_cuda_ipc &&
+colcon build`) and sourced before this package; `cudaipc_bench` is only built when it is found.
+The Lyrical image satisfies the backend's `libnvidia-compute-595` dependency with an empty
+package and uses the host driver mounted by the NVIDIA runtime.
 
 ## Multi-stream: CPU, latency, delivery and cache misses
 
@@ -133,6 +216,8 @@ PERF=1 benchmarks/ros2_cpp/run_mstream.sh          # + cache misses and instruct
 Raw data: `results/ms_rep{1,2,3}.jsonl`.
 
 ## Notes from setting it up
+
+- **This PC was unstable during part of the work.** Under heavy mixed load, physical cores 2-4 of the Ryzen 7 9800X3D crashed the kernel (13 panics since 2026-09-30). A ros2_cuda_ipc run made shortly before a panic measured 0.6-1 ms and was discarded. Everything in the GPU-transport comparison above was measured after offlining those cores (`0-1,5-9,13-15` online, recorded in the jsonl `meta` line). The earlier single-stream and multi-stream tables were measured with all 16 CPUs, in sessions that did not panic.
 
 - **Default Fast DDS does not use shared memory for these sizes.** Without the profile, `ros_loan` reports `can_loan_messages=1`, but `/dev/shm` holds no data-sharing segment during a 4 MiB run, and it measured 102 µs (1 MiB) and 332 µs (4 MiB). With the profile the segments appear and latency drops to about 35 µs and 80 µs. `can_loan_messages()` only says the type is plain.
 - **The default 512 KB shared-memory segment drops camera frames.** A 614 KB unbounded message does not fit, so Fast DDS sends it as UDP fragments, and under best-effort one lost fragment loses the frame. Before the profile raised the segment to 16 MB, `ros_dyn` delivered 40-92 % of the first camera stream (the other cameras were near 100 %; spreading the first deadlines with `MSTREAM_STAGGER=1` helped but did not fix it). With 16 MB segments, 3 of 3 runs at scale 1 delivered 100 %, and so did every cell above. That is why the binaries now check the segment size before running `ros_dyn`.

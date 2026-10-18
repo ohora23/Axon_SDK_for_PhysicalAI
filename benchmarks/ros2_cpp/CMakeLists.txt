@@ -62,6 +62,25 @@ ament_target_dependencies(mstream
 
 target_link_libraries(mstream ${cpp_typesupport_target} ${AXON_LIB} CUDA::cuda_driver rt pthread)
 
+# --- ros2_cuda_ipc comparison (optional: only when github.com/dskkato/ros2_cuda_ipc is
+# built and sourced, e.g. `source ~/repositories/ros2_cuda_ipc/install/setup.bash`) ---
+find_package(ros2_cuda_ipc_image QUIET)
+if(ros2_cuda_ipc_image_FOUND)
+  find_package(ros2_cuda_ipc_core REQUIRED)
+  find_package(ros2_cuda_ipc_msgs REQUIRED)
+  add_executable(cudaipc_bench src/cudaipc_bench.cpp)
+  target_include_directories(cudaipc_bench PRIVATE ${AXON_ROOT}/include)
+  target_compile_features(cudaipc_bench PRIVATE cxx_std_20)
+  ament_target_dependencies(cudaipc_bench rclcpp ros2_cuda_ipc_core ros2_cuda_ipc_image ros2_cuda_ipc_msgs)
+  target_link_libraries(cudaipc_bench ${AXON_LIB} CUDA::cudart CUDA::cuda_driver rt pthread)
+  install(TARGETS cudaipc_bench DESTINATION lib/${PROJECT_NAME})
+  add_executable(ipc_event_probe src/ipc_event_probe.cpp)
+  target_link_libraries(ipc_event_probe CUDA::cudart)
+  install(TARGETS ipc_event_probe DESTINATION lib/${PROJECT_NAME})
+else()
+  message(STATUS "ros2_cuda_ipc not found: skipping cudaipc_bench")
+endif()
+
 # Install
 install(TARGETS bench mstream
   DESTINATION lib/${PROJECT_NAME}

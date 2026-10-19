@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "cuda_buffer/cuda_buffer_api.hpp"
+#include "gpu_read_kernel.h"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/image.hpp"
 
@@ -113,6 +114,9 @@ int run_sub(std::size_t bytes, int frames, int rate_hz) {
     check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "cudaStreamCreate");
     std::uint64_t* host = nullptr;
     check(cudaMallocHost(reinterpret_cast<void**>(&host), 3 * sizeof(std::uint64_t)), "cudaMallocHost");
+    const bool kernel_read = axon_bench::consumer_kernel_enabled();
+    axon_bench::GpuReadKernel gpu_reader;
+    if (kernel_read) gpu_reader.init();
 
     rclcpp::SubscriptionOptions opts;
     opts.use_intra_process_comm = rclcpp::IntraProcessSetting::Disable;
@@ -134,9 +138,15 @@ int run_sub(std::size_t bytes, int frames, int rate_hz) {
         auto rh = cuda_buffer_backend::from_input_buffer(msg.data, stream);  // waits on the write event
         const bool promoted = cpu_path || rh.get_promoted_buffer() != nullptr;
         const auto* dev = static_cast<const std::uint8_t*>(rh.get_ptr());
-        check(cudaMemcpyAsync(host, dev, 16, cudaMemcpyDeviceToHost, stream), "DtoH header");
-        check(cudaMemcpyAsync(host + 2, dev + bytes - 8, 8, cudaMemcpyDeviceToHost, stream), "DtoH tail");
-        check(cudaStreamSynchronize(stream), "cudaStreamSynchronize");
+        if (kernel_read) {  // read the frame on the GPU, behind the event wait on the same stream
+            gpu_reader.launch(reinterpret_cast<CUdeviceptr>(dev), bytes, reinterpret_cast<CUstream>(stream));
+            check(cudaStreamSynchronize(stream), "cudaStreamSynchronize");
+            for (int k = 0; k < 3; ++k) host[k] = gpu_reader.result()[k];
+        } else {
+            check(cudaMemcpyAsync(host, dev, 16, cudaMemcpyDeviceToHost, stream), "DtoH header");
+            check(cudaMemcpyAsync(host + 2, dev + bytes - 8, 8, cudaMemcpyDeviceToHost, stream), "DtoH tail");
+            check(cudaStreamSynchronize(stream), "cudaStreamSynchronize");
+        }
         const std::uint64_t now = now_ns();
         if (host[1] != host[2]) { ++torn; continue; }
         if (host[1] <= last) continue;
@@ -149,10 +159,10 @@ int run_sub(std::size_t bytes, int frames, int rate_hz) {
     for (double x : lat) mean += x;
     std::printf("{\"role\":\"sub\",\"transport\":\"rosidl_buffer\",\"bytes\":%zu,\"gpu\":1,\"frames_sent\":%d,"
                 "\"frames_seen\":%d,\"torn\":%d,\"cpu_fallback\":%d,\"n\":%zu,\"p50_us\":%.1f,\"p90_us\":%.1f,"
-                "\"p99_us\":%.1f,\"max_us\":%.1f,\"mean_us\":%.1f}\n",
+                "\"p99_us\":%.1f,\"max_us\":%.1f,\"mean_us\":%.1f,\"consumer_kernel\":%d}\n",
                 bytes, frames, seen, torn, fallback, lat.size(), percentile(lat, 50), percentile(lat, 90),
                 percentile(lat, 99), lat.empty() ? 0.0 : *std::max_element(lat.begin(), lat.end()),
-                lat.empty() ? 0.0 : mean / lat.size());
+                lat.empty() ? 0.0 : mean / lat.size(), kernel_read ? 1 : 0);
     std::fflush(stdout);
     return seen > 0 ? 0 : 3;
 }

@@ -16,10 +16,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends equivs build-es
  && rm -rf /var/lib/apt/lists/*
 
 COPY lyrical/src /ws/src/axon_bench_lyrical
+COPY src/gpu_read_kernel.h /ws/src/axon_bench_lyrical/gpu_read_kernel.h
 COPY src/ipc_event_probe.cpp /ws/ipc_event_probe.cpp
 RUN . /opt/ros/lyrical/setup.sh && cd /ws && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release \
  && g++ -O2 ipc_event_probe.cpp -o ipc_event_probe -lcudart
 
 COPY fastdds_zero_copy.xml /ws/fastdds_zero_copy.xml
 COPY lyrical/run.sh /ws/run.sh
+# readable by a non-root --user (needed to share a user's CUDA MPS server)
+RUN chmod a+rx /ws/run.sh && chmod a+r /ws/fastdds_zero_copy.xml
 CMD ["/ws/run.sh"]

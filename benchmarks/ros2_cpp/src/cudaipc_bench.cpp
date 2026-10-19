@@ -28,6 +28,7 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "axon/rt.h"
+#include "gpu_read_kernel.h"
 #include "ros2_cuda_ipc_core/publisher/gpu_buffer_manager.hpp"
 #include "ros2_cuda_ipc_core/transport/message_utils.hpp"
 #include "ros2_cuda_ipc_image/image_reader.hpp"
@@ -146,6 +147,9 @@ int run_sub(std::size_t bytes, int frames, int rate_hz) {
     check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "cudaStreamCreate");
     std::uint64_t* host = nullptr;  // pinned 24 B for the header/tail readback
     check(cudaMallocHost(reinterpret_cast<void**>(&host), 3 * sizeof(std::uint64_t)), "cudaMallocHost");
+    const bool kernel_read = axon_bench::consumer_kernel_enabled();
+    axon_bench::GpuReadKernel gpu_reader;
+    if (kernel_read) gpu_reader.init();
 
     rclcpp::SubscriptionOptions opts;
     opts.use_intra_process_comm = rclcpp::IntraProcessSetting::Disable;
@@ -166,9 +170,15 @@ int run_sub(std::size_t bytes, int frames, int rate_hz) {
         const std::uint64_t t_read = axon::rt_now_ns();
         if (!view) { ++read_fail; continue; }
         auto* dev = view->read.data<std::uint8_t>();
-        check(cudaMemcpyAsync(host, dev, 16, cudaMemcpyDeviceToHost, stream), "DtoH header");
-        check(cudaMemcpyAsync(host + 2, dev + bytes - 8, 8, cudaMemcpyDeviceToHost, stream), "DtoH tail");
-        check(cudaStreamSynchronize(stream), "cudaStreamSynchronize");
+        if (kernel_read) {  // read the frame on the GPU, behind the event wait on the same stream
+            gpu_reader.launch(reinterpret_cast<CUdeviceptr>(dev), bytes, reinterpret_cast<CUstream>(stream));
+            check(cudaStreamSynchronize(stream), "cudaStreamSynchronize");
+            for (int k = 0; k < 3; ++k) host[k] = gpu_reader.result()[k];
+        } else {
+            check(cudaMemcpyAsync(host, dev, 16, cudaMemcpyDeviceToHost, stream), "DtoH header");
+            check(cudaMemcpyAsync(host + 2, dev + bytes - 8, 8, cudaMemcpyDeviceToHost, stream), "DtoH tail");
+            check(cudaStreamSynchronize(stream), "cudaStreamSynchronize");
+        }
         const std::uint64_t now = axon::rt_now_ns();
         if (host[1] != host[2]) { ++torn; continue; }
         if (host[1] <= last) continue;
@@ -183,11 +193,12 @@ int run_sub(std::size_t bytes, int frames, int rate_hz) {
     }
     std::printf("{\"role\":\"sub\",\"transport\":\"cudaipc\",\"bytes\":%zu,\"gpu\":1,\"frames_sent\":%d,"
                 "\"frames_seen\":%d,\"torn\":%d,\"read_fail\":%d,\"n\":%zu,\"p50_us\":%.1f,\"p90_us\":%.1f,"
-                "\"p99_us\":%.1f,\"max_us\":%.1f,\"mean_us\":%.1f,\"host_sync_producer\":%s,"
+                "\"p99_us\":%.1f,\"max_us\":%.1f,\"mean_us\":%.1f,\"consumer_kernel\":%d,\"host_sync_producer\":%s,"
                 "\"stage_take_p50_us\":%.1f,\"stage_read_p50_us\":%.1f,\"stage_sync_p50_us\":%.1f}\n",
                 bytes, frames, seen, torn, read_fail, lat.size(), percentile(lat, 50), percentile(lat, 90),
                 percentile(lat, 99), lat.empty() ? 0.0 : *std::max_element(lat.begin(), lat.end()),
                 lat.empty() ? 0.0 : [&] { double t = 0; for (double x : lat) t += x; return t / lat.size(); }(),
+                kernel_read ? 1 : 0,
                 std::getenv("CUDAIPC_HOST_SYNC") ? "true" : "false",
                 percentile(st_take, 50), percentile(st_read, 50), percentile(st_sync, 50));
     std::fflush(stdout);

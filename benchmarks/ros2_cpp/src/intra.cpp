@@ -24,6 +24,7 @@
 #include "axon_bench/msg/payload4_m.hpp"
 
 #include "axon/rt.h"
+#include "gpu_read_kernel.h"
 
 #include <cuda.h>
 
@@ -110,7 +111,8 @@ static void print_sub_result(const char* transport, int bytes, int gpu, int fram
     if (gpu == 0) {
         std::fprintf(stdout, ",\"copied\":%d}", res.copied);
     } else {
-        std::fprintf(stdout, ",\"converted\":%d}", res.converted);
+        std::fprintf(stdout, ",\"converted\":%d,\"consumer_kernel\":%d}", res.converted,
+                     axon_bench::consumer_kernel_enabled() ? 1 : 0);
     }
     std::fprintf(stdout, "\n");
     std::fflush(stdout);
@@ -324,16 +326,28 @@ static void run_intra_gpu(int bytes, int frames, int rate_hz,
     check_cuda(cuMemAlloc(&d_src, bytes), "cuMemAlloc src");
     check_cuda(cuMemcpyHtoD(d_src, src.data(), bytes), "cuMemcpyHtoD src");
 
+    const bool kernel_read = axon_bench::consumer_kernel_enabled();
+    axon_bench::GpuReadKernel reader;
+    if (kernel_read) reader.init();
+
     // GPU subscriber callback
     auto sub_cb = [&](std::unique_ptr<GpuFrame> frame) {
         if (!frame || frame->bytes != (std::size_t)bytes) return;
 
         uint8_t hdr[16];
         uint8_t tail[8];
-        check_cuda(cuMemcpyDtoH(hdr, frame->ptr, 16),
-                   "callback cuMemcpyDtoH hdr");
-        check_cuda(cuMemcpyDtoH(tail, frame->ptr + bytes - 8, 8),
-                   "callback cuMemcpyDtoH tail");
+        if (kernel_read) {  // read the frame on the GPU (same process: no context switch)
+            reader.launch(frame->ptr, bytes, 0);
+            check_cuda(cuCtxSynchronize(), "cuCtxSynchronize");
+            const uint64_t r[3] = {reader.result()[0], reader.result()[1], reader.result()[2]};
+            std::memcpy(hdr, r, 16);
+            std::memcpy(tail, r + 2, 8);
+        } else {
+            check_cuda(cuMemcpyDtoH(hdr, frame->ptr, 16),
+                       "callback cuMemcpyDtoH hdr");
+            check_cuda(cuMemcpyDtoH(tail, frame->ptr + bytes - 8, 8),
+                       "callback cuMemcpyDtoH tail");
+        }
 
         uint64_t head_seq, tail_seq, t0;
         std::memcpy(&t0, hdr, 8);

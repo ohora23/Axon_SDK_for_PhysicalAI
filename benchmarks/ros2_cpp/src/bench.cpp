@@ -20,12 +20,21 @@
 #include "axon_bench/msg/payload147_k.hpp"
 #include "axon_bench/msg/payload1_m.hpp"
 #include "axon_bench/msg/payload4_m.hpp"
+#include "axon_bench/msg/payload16_m.hpp"
+#include "axon_bench/msg/payload64_m.hpp"
+#include "axon_bench/msg/payload64.hpp"
+#include "axon_bench/msg/payload8640.hpp"
+
+// Payload sizes the ros_loan cells have a fixed-size message type for.
+#define AXON_BENCH_SIZES(X) X(64, Payload64) X(8640, Payload8640) X(150528, Payload147K) \
+    X(1048576, Payload1M) X(4194304, Payload4M) X(16777216, Payload16M) X(67108864, Payload64M)
 
 #include "axon/pool.h"
 #include "axon/publisher.h"
 #include "axon/subscriber.h"
 #include "axon/rt.h"
 #include "fastdds_check.h"
+#include "gpu_read_kernel.h"
 
 #include <cuda.h>
 
@@ -128,14 +137,15 @@ static void print_sub_result(const char* transport, int bytes, int gpu, int fram
     const char* sub_id_env = std::getenv("BENCH_SUB_ID");
     int sub_id = sub_id_env ? atoi(sub_id_env) : 0;
     std::fprintf(stdout,
-        "{\"role\":\"sub\",\"transport\":\"%s\",\"bytes\":%d,\"gpu\":%d,\"frames_sent\":%d,\"frames_seen\":%d,\"torn\":%d,\"n\":%d,\"p50_us\":%.1f,\"p90_us\":%.1f,\"p99_us\":%.1f,\"max_us\":%.1f,\"mean_us\":%.1f,\"cpu_s\":%.4f,\"cpu_window_s\":%.4f,\"window_s\":%.4f,\"sub_id\":%d,\"wait\":%d,\"first_seq\":%llu}\n",
+        "{\"role\":\"sub\",\"transport\":\"%s\",\"bytes\":%d,\"gpu\":%d,\"frames_sent\":%d,\"frames_seen\":%d,\"torn\":%d,\"n\":%d,\"p50_us\":%.1f,\"p90_us\":%.1f,\"p99_us\":%.1f,\"max_us\":%.1f,\"mean_us\":%.1f,\"cpu_s\":%.4f,\"cpu_window_s\":%.4f,\"window_s\":%.4f,\"sub_id\":%d,\"wait\":%d,\"first_seq\":%llu,\"consumer_kernel\":%d}\n",
         transport, bytes, gpu, frames_sent, res.frames_seen, res.torn,
         (int)res.samples_us.size(),
         percentile(res.samples_us, 50), percentile(res.samples_us, 90),
         percentile(res.samples_us, 99),
         res.samples_us.empty() ? 0.0 : *std::max_element(res.samples_us.begin(), res.samples_us.end()),
         mean_val(res.samples_us), res.cpu_s, res.cpu_window_s, res.window_s,
-        sub_id, wait_on, (unsigned long long)res.first_seq);
+        sub_id, wait_on, (unsigned long long)res.first_seq,
+        gpu == 1 && axon_bench::consumer_kernel_enabled() && std::strcmp(transport, "ros_dyn") != 0 ? 1 : 0);
     std::fflush(stdout);
 }
 
@@ -385,9 +395,12 @@ static SubResult run_sub_ros_loan(int bytes, int frames, int rate_hz, int gpu) {
     std::uint64_t wall_first = 0;
 
     CUdeviceptr d_dst = 0;
+    const bool kernel_read = gpu == 1 && axon_bench::consumer_kernel_enabled();
+    axon_bench::GpuReadKernel reader;
     if (gpu == 1) {
         init_cuda_ctx();
         check_cuda(cuMemAlloc(&d_dst, bytes), "cuMemAlloc dst");
+        if (kernel_read) reader.init();
     }
 
     rclcpp::WaitSet ws;
@@ -407,14 +420,16 @@ static SubResult run_sub_ros_loan(int bytes, int frames, int rate_hz, int gpu) {
             auto& msg = *static_cast<MsgT*>(loaned);
             if (gpu == 1) {
                 check_cuda(cuMemcpyHtoD(d_dst, msg.data.data(), bytes), "cuMemcpyHtoD dst");
+                if (kernel_read) reader.launch(d_dst, bytes, 0);  // read the frame on the GPU
                 check_cuda(cuCtxSynchronize(), "cuCtxSynchronize");
             }
             std::uint64_t now = axon::rt_now_ns();
             std::uint64_t head_seq = read_head_seqno(msg.data.data(), msg.data.size());
             std::uint64_t tail_seq = read_tail_seqno(msg.data.data(), msg.data.size());
-            if (head_seq != tail_seq) ++res.torn;
             std::uint64_t t0;
             std::memcpy(&t0, msg.data.data(), 8);
+            if (kernel_read) { t0 = reader.result()[0]; head_seq = reader.result()[1]; tail_seq = reader.result()[2]; }
+            if (head_seq != tail_seq) ++res.torn;
             if (head_seq > last_seqno) {
                 ++seen;
                 if (seen == 1) {
@@ -587,6 +602,9 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
         }
     } else {
         if (gpu == 1) init_cuda_ctx();
+        const bool kernel_read = axon_bench::consumer_kernel_enabled();
+        axon_bench::GpuReadKernel reader;
+        if (kernel_read) reader.init();
         while ((std::chrono::steady_clock::now() - start).count() / 1e9 < deadline) {
             if (wait_on) {
                 int r = sub->wait_for_update(100);
@@ -596,9 +614,17 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
             if (v && v->seqno > last_seqno && v->device_ptr != nullptr) {
                 uint8_t hdr[16];
                 CUdeviceptr dp = reinterpret_cast<CUdeviceptr>(v->device_ptr);
-                check_cuda(cuMemcpyDtoH(hdr, dp, 16), "cuMemcpyDtoH hdr");
                 uint8_t tail[8];
-                check_cuda(cuMemcpyDtoH(tail, dp + v->shape.dims[0] - 8, 8), "cuMemcpyDtoH tail");
+                if (kernel_read) {  // read the frame on the GPU instead of copying it back
+                    reader.launch(dp, v->shape.dims[0], 0);
+                    check_cuda(cuCtxSynchronize(), "cuCtxSynchronize");
+                    const std::uint64_t r[3] = {reader.result()[0], reader.result()[1], reader.result()[2]};
+                    std::memcpy(hdr, r, 16);
+                    std::memcpy(tail, r + 2, 8);
+                } else {
+                    check_cuda(cuMemcpyDtoH(hdr, dp, 16), "cuMemcpyDtoH hdr");
+                    check_cuda(cuMemcpyDtoH(tail, dp + v->shape.dims[0] - 8, 8), "cuMemcpyDtoH tail");
+                }
 
                 std::uint64_t head_seq, tail_seq, t0;
                 std::memcpy(&t0, hdr, 8);
@@ -639,9 +665,9 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
 static int dispatch_pub(const char* transport_str, int bytes, int frames, int rate_hz, int gpu) {
     if (strcmp(transport_str, "ros_dyn") == 0) return run_pub_ros_dyn(bytes, frames, rate_hz, gpu);
     if (strcmp(transport_str, "ros_loan") == 0) {
-        if (bytes == 150528) return run_pub_ros_loan<axon_bench::msg::Payload147K>(bytes, frames, rate_hz, gpu);
-        if (bytes == 1048576) return run_pub_ros_loan<axon_bench::msg::Payload1M>(bytes, frames, rate_hz, gpu);
-        return run_pub_ros_loan<axon_bench::msg::Payload4M>(bytes, frames, rate_hz, gpu);
+#define X(n, T) if (bytes == n) return run_pub_ros_loan<axon_bench::msg::T>(bytes, frames, rate_hz, gpu);
+        AXON_BENCH_SIZES(X)
+#undef X
     }
     if (strcmp(transport_str, "axon") == 0) return run_pub_axon(bytes, frames, rate_hz, gpu);
     std::fprintf(stderr, "unknown transport: %s\n", transport_str);
@@ -651,9 +677,9 @@ static int dispatch_pub(const char* transport_str, int bytes, int frames, int ra
 static SubResult dispatch_sub(const char* transport_str, int bytes, int frames, int rate_hz, int gpu) {
     if (strcmp(transport_str, "ros_dyn") == 0) return run_sub_ros_dyn(bytes, frames, rate_hz, gpu);
     if (strcmp(transport_str, "ros_loan") == 0) {
-        if (bytes == 150528) return run_sub_ros_loan<axon_bench::msg::Payload147K>(bytes, frames, rate_hz, gpu);
-        if (bytes == 1048576) return run_sub_ros_loan<axon_bench::msg::Payload1M>(bytes, frames, rate_hz, gpu);
-        return run_sub_ros_loan<axon_bench::msg::Payload4M>(bytes, frames, rate_hz, gpu);
+#define X(n, T) if (bytes == n) return run_sub_ros_loan<axon_bench::msg::T>(bytes, frames, rate_hz, gpu);
+        AXON_BENCH_SIZES(X)
+#undef X
     }
     if (strcmp(transport_str, "axon") == 0) return run_sub_axon(bytes, frames, rate_hz, gpu);
     std::fprintf(stderr, "unknown transport: %s\n", transport_str);
@@ -665,7 +691,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "Usage: bench <role> <transport> <bytes> <frames> <rate_hz> <gpu>\n");
         std::fprintf(stderr, "  role: pub|sub\n");
         std::fprintf(stderr, "  transport: ros_dyn|ros_loan|axon\n");
-        std::fprintf(stderr, "  bytes: 150528|1048576|4194304\n");
+        std::fprintf(stderr, "  bytes: 64|8640|150528|1048576|4194304|16777216|67108864\n");
         std::fprintf(stderr, "  gpu: 0|1\n");
         return 1;
     }
@@ -677,8 +703,12 @@ int main(int argc, char** argv) {
     int rate_hz = atoi(argv[5]);
     int gpu = atoi(argv[6]);
 
-    if (bytes != 150528 && bytes != 1048576 && bytes != 4194304) {
-        std::fprintf(stderr, "bytes must be 150528, 1048576, or 4194304\n");
+    bool known = false;
+#define X(n, T) known = known || bytes == n;
+    AXON_BENCH_SIZES(X)
+#undef X
+    if (!known) {
+        std::fprintf(stderr, "bytes must be one of 64, 8640, 150528, 1048576, 4194304, 16777216, 67108864\n");
         return 1;
     }
     if (gpu != 0 && gpu != 1) {

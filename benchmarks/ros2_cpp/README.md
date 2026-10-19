@@ -343,12 +343,15 @@ payload is 262 K cache lines at 16 MiB and 1 M at 64 MiB:
 
 - **At 16 MiB, ring depth costs DRAM traffic.** With 4 buffers, 21 % of each frame's lines come
   from DRAM, against almost none with 1-2. Cycles and latency follow. dTLB misses are the same in
-  every row: 4 KiB pages for the source and the destination, no huge pages. Page faults are 0
-  per frame. So it is cache capacity, not paging or the TLB. iceoryx2 behaves like axon with one
-  buffer, since it reuses its sample. With 2 buffers, axon costs about 10 % more than with 1.
+  every row, and ~8.5 K per 16 MiB frame matches 4 KiB pages for the source and the destination
+  (inferred, not checked directly). Page faults are 0 per frame. So the cost is consistent with
+  cache capacity, not paging or the TLB. iceoryx2 behaves like axon with one buffer; its working
+  set is presumably a few samples, which was not measured. With 2 buffers, axon costs about 10 %
+  more than with 1.
 - **At 64 MiB, the payload no longer fits in any case** (30-58 % from DRAM). A 1-buffer axon ring
-  is still 7 % slower than iceoryx2, which fills even more lines from DRAM but far fewer from
-  L3. That gap is not explained by these counters.
+  is still 7 % slower than iceoryx2, which fills even more lines from DRAM. axon's L3 fills vary
+  widely between runs there (40-235 K, against a steady 35 K for iceoryx2). That gap is not
+  explained by these counters.
 - These numbers come from a different session than the size table, which had 474 µs for axon at
   16 MiB with 4 buffers. Single-stream cells at this size vary by tens of percent between
   sessions on this PC.

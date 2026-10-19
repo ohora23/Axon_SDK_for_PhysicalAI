@@ -185,9 +185,10 @@ Example: a 120 fps producer with a consumer that spends up to 20 ms on a frame
 and one extra recorder → `ceil(0.020 × 120) + 2 + 1 = 6`. The demos default to
 **4–8**, which covers typical single-host inference; raise it if a consumer does
 heavy per-frame work or you run many consumers. Cost is RAM (`n_buffers × buffer_size`), and,
-for host buffers of several MiB, cache. When the ring no longer fits in the last-level cache,
-the producer's write goes to DRAM. At 16 MiB on a 96 MB-L3 CPU, 4 buffers made the write 1.5-1.7×
-slower than 2 or 1 (benchmarks/ros2_cpp, "Why ring depth costs at 16 MiB"). So for large
+for host buffers of several MiB, cache. As the ring, the producer's source and the readers'
+traffic approach the last-level cache size, more of the producer's write goes to DRAM. At
+16 MiB on a 96 MB-L3 CPU, 4 buffers filled 21 % of each frame from DRAM against ~0 % with 1-2,
+and p50 was 1.5-1.7× higher than with 2 or 1 (benchmarks/ros2_cpp, "Why ring depth costs at 16 MiB"). So for large
 host frames, use the smallest ring the formula allows.
 
 **If you truly need every frame intact** (e.g. lossless recording), don't push

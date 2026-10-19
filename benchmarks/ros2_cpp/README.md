@@ -320,13 +320,43 @@ one 8640 B run lost one frame at 1 kHz. The serialized Fast DDS cell (`UInt8Mult
   around the transport: dma-buf/V4L2 and CUDA buffer pools, the GPU handoff, and RT
   latest-value semantics.
 - **From 16 MiB, axon is the slowest of the zero-copy paths on the host** (16 MiB: axon 474,
-  iceoryx2 238, Fast DDS loaned 304 µs). The time grows with axon's ring depth. With
-  `AXON_BENCH_NBUF` 1/2/3/4 at 16 MiB, p50 was 271/400/537/592 µs (one run each; the gated
-  4-buffer median is 474, so these single runs are noisy). The likely cause is last-level-cache
-  pressure on the producer's write, but that was not measured. One buffer comes within about
-  15 % of iceoryx2. A shallower ring, though, makes a torn frame more likely for a slow reader
-  (see [docs/usage.md](../../docs/usage.md) on ring sizing). At 64 MiB, a 1-buffer ring is still
-  2803 µs against iceoryx2's 2348 µs; why was not traced.
+  iceoryx2 238, Fast DDS loaned 304 µs). The time grows with axon's ring depth, and the
+  counters below show why: at 16 MiB the producer's write runs out of cache. A shallower ring
+  makes a torn frame more likely for a slow reader, though
+  (see [docs/usage.md](../../docs/usage.md) on ring sizing).
+
+**Why ring depth costs at 16 MiB** ([`run_ring_perf.sh`](run_ring_perf.sh)). Hardware counters
+on the producer process, which writes the whole payload, and that write is most of the
+latency. 30 Hz, 300 frames, counted from 1.5 s in (after setup), 3 runs, median per frame. A
+payload is 262 K cache lines at 16 MiB and 1 M at 64 MiB:
+
+| payload | producer | p50 µs | lines filled from DRAM | from L3 | L1 dTLB misses | cycles |
+|---|---|---|---|---|---|---|
+| 4 MiB | axon, 1 / 2 / 4 buffers | 59 / 59 / 60 | 0-1 K | 8-15 K | 2.2 K | 0.31-0.36 M |
+| 4 MiB | iceoryx2 | 61 | 0 K | 13 K | 2.2 K | 0.33 M |
+| 16 MiB | axon, 1 buffer | 227 | 1 K (0 %) | 22 K | 8.5 K | 1.18 M |
+| 16 MiB | axon, 2 buffers | 250 | 9 K (3 %) | 15 K | 8.5 K | 1.34 M |
+| 16 MiB | axon, 4 buffers | **384** | **55 K (21 %)** | 14 K | 8.7 K | 1.98 M |
+| 16 MiB | iceoryx2 | 237 | 1 K (0 %) | 18 K | 8.4 K | 1.19 M |
+| 64 MiB | axon, 1 / 2 / 4 buffers | 2312 / 3003 / 3219 | 312 / 613 / 595 K | 219 / 176 / 362 K | 30-33 K | 12.3-17.0 M |
+| 64 MiB | iceoryx2 | 2156 | 416 K | 35 K | 33.5 K | 11.4 M |
+
+- **At 16 MiB, ring depth costs DRAM traffic.** With 4 buffers, 21 % of each frame's lines come
+  from DRAM, against almost none with 1-2. Cycles and latency follow. dTLB misses are the same in
+  every row: 4 KiB pages for the source and the destination, no huge pages. Page faults are 0
+  per frame. So it is cache capacity, not paging or the TLB. iceoryx2 behaves like axon with one
+  buffer, since it reuses its sample. With 2 buffers, axon costs about 10 % more than with 1.
+- **At 64 MiB, the payload no longer fits in any case** (30-58 % from DRAM). A 1-buffer axon ring
+  is still 7 % slower than iceoryx2, which fills even more lines from DRAM but far fewer from
+  L3. That gap is not explained by these counters.
+- These numbers come from a different session than the size table, which had 474 µs for axon at
+  16 MiB with 4 buffers. Single-stream cells at this size vary by tens of percent between
+  sessions on this PC.
+- In practice, a host payload of several MiB or more wants the shallowest ring its readers
+  allow. 2 buffers is the cheap middle ground. The benchmark keeps 4 for every size, to keep
+  one rule.
+
+Raw data: `results/ring_perf_rep.jsonl` (needs `kernel.perf_event_paranoid` ≤ 1).
 - **zenoh's shared memory halves its latency** (242 → 125 µs at 1 MiB), but without loans it
   stays a serialized path.
 

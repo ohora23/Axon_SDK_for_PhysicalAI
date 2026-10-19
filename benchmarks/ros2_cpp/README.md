@@ -181,7 +181,7 @@ mkdir -p $CUDA_MPS_PIPE_DIRECTORY $CUDA_MPS_LOG_DIRECTORY && nvidia-cuda-mps-con
 
 ### When the consumer runs a kernel
 
-With `BENCH_CONSUMER_KERNEL=1`, the consumer reads the 24 B with one tiny kernel on its own
+With `BENCH_CONSUMER_KERNEL=1`, the consumer reads the 24 B with one tiny kernel on the consumer's
 stream instead of two DtoH copies ([`src/gpu_read_kernel.h`](src/gpu_read_kernel.h), inline
 PTX, results written to mapped host memory). For the event-based transports, that kernel is
 queued behind the event wait on the same stream. axon, ROS 2 loaned and intra-process launch it on

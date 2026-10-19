@@ -217,7 +217,8 @@ Prefer a mature alternative when:
   official **`rosidl::Buffer` CUDA backend** on Lyrical or later (ros2_cuda_ipc on older
   distros), or **Isaac ROS / NITROS**. Reach for axon there only if the RT latest-value
   semantics or the per-frame GPU latency matter to you. With MPS that gap is ~20-25 µs per
-  frame for kernel consumers and ~10-30 µs for copying ones. Without MPS, it is ~100 µs only for consumers that copy results out, and none for
+    frame for kernel consumers and ~10-30 µs for copying ones. Without MPS, it is ~100 µs only
+  for consumers that copy results out, and none for
   consumers that run kernels.
 - You want a batteries-included **vision pipeline** (decode → infer → encode) →
   **DeepStream** (or **Holoscan** for low-latency sensor fusion).

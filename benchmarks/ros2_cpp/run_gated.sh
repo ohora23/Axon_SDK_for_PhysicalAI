@@ -79,7 +79,7 @@ if [ "$MODE" = gpu ]; then
       --ipc=host --pid=host "${u[@]}" -e REPS=1 -e BENCH_CONSUMER_KERNEL="$2" axon-bench-lyrical > "$T/lyrical.out" 2>/dev/null
   }
   for mps in 0 1; do
-    [ $mps = 1 ] && { nvidia-cuda-mps-control -d || exit 1; trap 'echo quit | nvidia-cuda-mps-control; kill $SP $QP 2>/dev/null' EXIT; }
+    [ $mps = 1 ] && { nvidia-cuda-mps-control -d || exit 1; trap 'echo quit | nvidia-cuda-mps-control; kill $SP $QP 2>/dev/null; restore' EXIT; }
     for k in 0 1; do
       export BENCH_CONSUMER_KERNEL=$k
       for rep in $(seq 1 "$REPS"); do
@@ -91,7 +91,7 @@ if [ "$MODE" = gpu ]; then
         grep '"role":"sub"' "$T/lyrical.out" | tag $mps $k $rep >> "$T/ck.acc"
       done
     done
-    [ $mps = 1 ] && echo quit | nvidia-cuda-mps-control
+    [ $mps = 1 ] && { echo quit | nvidia-cuda-mps-control; trap 'kill $SP $QP 2>/dev/null; restore' EXIT; }
   done
   mv "$T/ck.acc" "$OUT"; echo "== done $(date +%T)"; exit 0
 fi

@@ -164,7 +164,8 @@ This changes what the headline means:
 - **axon's 24-26 µs is the time to the consumer's 24 B readback, a copy.** The copy does not pay
   the context switch, with or without MPS. A consumer that *launches a kernel* on the frame
   pays it with axon too; see [When the consumer runs a kernel](#when-the-consumer-runs-a-kernel).
-- **With MPS, the GPU-sharing ROS 2 transports land at 35-55 µs** and axon stays at 25-29 µs.
+- **With MPS, the GPU-sharing ROS 2 transports land at 35-56 µs** and axon at 24-29 µs, across
+  the #47/#48 sessions and this one (here: 38-56 against 27-29).
   The remaining difference is the DDS descriptor.
 - MPS is not the default. It runs one server per user, so containers must run as the same
   user and share its pipe directory. Every client shares one GPU context, so a fault in one
@@ -183,11 +184,12 @@ mkdir -p $CUDA_MPS_PIPE_DIRECTORY $CUDA_MPS_LOG_DIRECTORY && nvidia-cuda-mps-con
 With `BENCH_CONSUMER_KERNEL=1`, the consumer reads the 24 B with one tiny kernel on its own
 stream instead of two DtoH copies ([`src/gpu_read_kernel.h`](src/gpu_read_kernel.h), inline
 PTX, results written to mapped host memory). For the event-based transports, that kernel is
-queued behind the event wait on the same stream. This is what a consumer that runs inference
+queued behind the event wait on the same stream. axon, ROS 2 loaned and intra-process launch it on
+the legacy default stream and wait with `cuCtxSynchronize`. This is what a consumer that runs inference
 on the frame pays first. Every cell was measured in one session, with and without MPS, 3 runs,
 500/500 delivered, 0 torn, 0 CPU fallbacks. p50 µs (median of 3) at 1 MiB. At 147 KiB and 4 MiB
 every row is within ±7 µs of it, except ROS 2's host-memory path, which grows with size
-(45-50 µs at 147 KiB, 481-505 µs at 4 MiB):
+(45-52 µs at 147 KiB, 481-505 µs at 4 MiB):
 
 | transport | copy, default | **kernel, default** | copy, MPS | **kernel, MPS** |
 |---|---|---|---|---|
@@ -202,7 +204,8 @@ every row is within ±7 µs of it, except ROS 2's host-memory path, which grows 
   contexts is paid by whoever touches the frame with a kernel first. The event designs paid it
   inside their event wait, so their kernel cells barely change. axon's copy-only cell never
   paid it.
-- **With MPS, axon's lead holds for kernel consumers:** 22-26 µs against 41-51 µs, about 2×.
+- **With MPS, axon's lead holds for kernel consumers:** 22-26 µs against 41-51 µs, 1.6-2.2×
+  depending on size.
 - **Inside one process there is no context switch.** The intra-process kernel cell is 25 µs
   without MPS. MPS adds 3-8 µs there, and to axon's copy cell.
 - **p99:** axon's kernel cell without MPS is 140-142 µs. With MPS, axon's kernel cell is 34-37 µs,
@@ -213,7 +216,7 @@ So for GPU consumers that run kernels, axon's GPU advantage over the GPU-sharing
 transports **needs MPS**. Without MPS, it remains only for consumers that copy results out, or
 against ROS 2's host-memory path.
 
-Raw data: `results/consumer_kernel_rep.jsonl` (`"mps"` and `"consumer_kernel"` on every line),
+Raw data: `results/consumer_kernel_rep.jsonl` (`"mps"` and `"consumer_kernel"` on every consumer line),
 from `run_gated.sh gpu`.
 
 ### The producer's host-sync
@@ -300,8 +303,12 @@ p50 µs) from 64 B to 64 MiB. 64 B and 8640 B run at 1 kHz for 2000 frames, 147 
 | 147 KiB | **4.3** | 5.2 | 22.4 | 17.4 | 63.0 |
 | 1 MiB | **15.4** | 16.5 | 33.9 | 30.9 | 125.5 (SHM off: 242) |
 | 4 MiB | 59.2 | 59.3 | 75.4 | 73.8 | 344.9 |
-| 16 MiB | 474 | **238** | 304 | | 1495 |
-| 64 MiB | 3271 | **2348** | 3050 | | |
+| 16 MiB | 474 | **238** | 304 | not run¹ | 1495 |
+| 64 MiB | 3271 | **2348** | 3050 | not run¹ | not run |
+
+¹ The RouDi mempools in `iox_roudi_mempools.toml` stop at 4 MiB chunks. The axon, `iox2` and
+Fast DDS columns come from the `sizes` session, Cyclone and zenoh from the `rmw` session. In the
+`rmw` session, Fast DDS loaned (34.4 µs) and axon (15.3 µs) at 1 MiB match the `sizes` session.
 
 Every cell delivered every frame with 0 torn, except zenoh: two runs missed frame 1 (setup), and
 one 8640 B run lost one frame at 1 kHz. The serialized Fast DDS cell (`UInt8MultiArray`) is
@@ -312,10 +319,12 @@ one 8640 B run lost one frame at 1 kHz. The serialized Fast DDS cell (`UInt8Mult
   host advantage over a plain shared-memory transport is therefore not latency. It is what sits
   around the transport: dma-buf/V4L2 and CUDA buffer pools, the GPU handoff, and RT
   latest-value semantics.
-- **From 16 MiB, axon is the slowest on the host.** The cost here is the producer's `memcpy`,
-  and axon's 4-buffer ring (64 MB at 16 MiB) falls out of the 96 MB L3. With `AXON_BENCH_NBUF`
-  1/2/3/4 at 16 MiB, p50 was 271/400/537/592 µs (one run each). One buffer is about as fast as
-  iceoryx2, but a shallower ring makes a torn frame more likely for a slow reader
+- **From 16 MiB, axon is the slowest of the zero-copy paths on the host** (16 MiB: axon 474,
+  iceoryx2 238, Fast DDS loaned 304 µs). The time grows with axon's ring depth. With
+  `AXON_BENCH_NBUF` 1/2/3/4 at 16 MiB, p50 was 271/400/537/592 µs (one run each; the gated
+  4-buffer median is 474, so these single runs are noisy). The likely cause is last-level-cache
+  pressure on the producer's write, but that was not measured. One buffer comes within about
+  15 % of iceoryx2. A shallower ring, though, makes a torn frame more likely for a slow reader
   (see [docs/usage.md](../../docs/usage.md) on ring sizing). At 64 MiB, a 1-buffer ring is still
   2803 µs against iceoryx2's 2348 µs; why was not traced.
 - **zenoh's shared memory halves its latency** (242 → 125 µs at 1 MiB), but without loans it

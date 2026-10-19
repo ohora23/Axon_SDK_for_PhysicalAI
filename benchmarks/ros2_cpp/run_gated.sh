@@ -22,7 +22,9 @@ export PATH=/usr/local/cuda/bin:$PATH RMW_IMPLEMENTATION=rmw_fastrtps_cpp ROS_DO
 # Our own processes; anything else above 30 % of a core, or on the SMs, dirties the unit.
 OWN='bench|intra|sync_cost|mstream|cudaipc_bench|ipc_event_probe|rosidl_buffer|docker|containerd|colcon|python3|bash|top|awk|nvidia-smi|sed|grep|sleep|ros2|claude|node|rmw_zenohd|iox-roudi'
 # On the GPU only the benchmark binaries are ours: a python3 or node process on the SMs is foreign.
-GPU_OWN='^(bench|intra|sync_cost|mstream|cudaipc_bench|ipc_event_probe|rosidl_buffer|nvidia-cuda-mps)'  # pmon truncates names
+# pmon truncates names, so this is a prefix match (a foreign process named bench* would pass), and under
+# MPS other clients' work shows up as nvidia-cuda-mps-server.
+GPU_OWN='^(bench|intra|sync_cost|mstream|cudaipc_bench|ipc_event_probe|rosidl_buffer|nvidia-cuda-mps)'
 gpu_busy() { nvidia-smi pmon -c 1 -s u | awk -v own="$GPU_OWN" '!/^#/ && $3 ~ /C/ && $4 ~ /^[0-9]+$/ && $4 > 0 && $NF !~ own' | grep -c .; }
 cpu_busy() { top -b -d 0.5 -n 2 -w 200 | awk -v own="$OWN" '/^top -/{n++} n==2 && $1 ~ /^[0-9]+$/ && $9+0 > 30 && $12 !~ own {print $12}' | head -3; }
 sampler() { while :; do
@@ -68,7 +70,8 @@ if [ "$MODE" = gpu ]; then
   OUT="$R/consumer_kernel_rep.jsonl"; meta consumer_kernel > "$T/ck.acc"
   export CUDA_MPS_PIPE_DIRECTORY="$T/mps-pipe" CUDA_MPS_LOG_DIRECTORY="$T/mps-log"
   mkdir -p "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
-  tag() { sed "s/^{\"rep\":[0-9]*,/{\"rep\":$3,\"mps\":$1,\"consumer_kernel\":$2,/; t; s/^{/{\"rep\":$3,\"mps\":$1,\"consumer_kernel\":$2,/"; }
+  # Tag rep and mps; consumer_kernel is printed by the consumers themselves.
+  tag() { sed "s/^{\"rep\":[0-9]*,/{\"rep\":$3,\"mps\":$1,/; t; s/^{/{\"rep\":$3,\"mps\":$1,/"; }
   intra_gpu() { for b in 150528 1048576 4194304; do "$HERE/install/axon_bench/lib/axon_bench/intra" $b 500 100 1 poll; done > "$T/intra_gpu.out" 2>/dev/null; }
   lyrical() {
     local u=(); [ "$1" = 1 ] && u=(--user "$(id -u):$(id -g)" -e HOME=/tmp -v "$CUDA_MPS_PIPE_DIRECTORY:/mps-pipe" -e CUDA_MPS_PIPE_DIRECTORY=/mps-pipe)
@@ -76,12 +79,12 @@ if [ "$MODE" = gpu ]; then
       --ipc=host --pid=host "${u[@]}" -e REPS=1 -e BENCH_CONSUMER_KERNEL="$2" axon-bench-lyrical > "$T/lyrical.out" 2>/dev/null
   }
   for mps in 0 1; do
-    [ $mps = 1 ] && { nvidia-cuda-mps-control -d || exit 1; }
+    [ $mps = 1 ] && { nvidia-cuda-mps-control -d || exit 1; trap 'echo quit | nvidia-cuda-mps-control; kill $SP $QP 2>/dev/null' EXIT; }
     for k in 0 1; do
       export BENCH_CONSUMER_KERNEL=$k
       for rep in $(seq 1 "$REPS"); do
         CUDAIPC_EXTRAS=0 NO_BUILD=1 RESULTS_DIR="$T/cudaipc" unit "cudaipc+axon+ros_loan mps=$mps kernel=$k rep=$rep" "$HERE/run_cudaipc.sh" 500 100 1
-        grep -v '"role":"meta"' "$T/cudaipc/cudaipc_$(date +%F).jsonl" | tag $mps $k $rep >> "$T/ck.acc"
+        grep -v '"role":"meta"' "$(ls -t "$T"/cudaipc/cudaipc_*.jsonl | head -1)" | tag $mps $k $rep >> "$T/ck.acc"  # newest, in case the date rolled over
         unit "intra mps=$mps kernel=$k rep=$rep" intra_gpu
         grep '^{' "$T/intra_gpu.out" | tag $mps $k $rep >> "$T/ck.acc"
         unit "rosidl_buffer mps=$mps kernel=$k rep=$rep" lyrical $mps $k

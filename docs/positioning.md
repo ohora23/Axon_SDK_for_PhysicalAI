@@ -30,12 +30,12 @@ alternatives don't quite occupy:
 Measured against the two ROS 2 transports that also share GPU memory between processes
 (the official Lyrical `rosidl::Buffer` CUDA backend and ros2_cuda_ipc), axon delivers a GPU
 frame to another process in **~25 µs**. The others take **~125 µs** in the GPU's default mode
-and **35-55 µs with CUDA MPS**. Whether axon keeps that lead depends on the consumer and on MPS:
+and **35-56 µs with CUDA MPS**. Whether axon keeps that lead depends on the consumer and on MPS:
 
 | consumer, at 1 MiB | without MPS | with MPS |
 |---|---|---|
-| copies the result out | axon 24 vs 124-126 µs (~5×) | axon 27 vs 41-56 µs (~1.5-2×) |
-| runs a kernel on the frame | axon **129** vs 122-124 µs (no lead) | axon **23** vs 44-49 µs (~2×) |
+| copies the result out | axon 24 vs 124-126 µs (~5×) | axon 27 vs 41-56 µs (~1.5-2×; 1.3× at 4 MiB) |
+| runs a kernel on the frame | axon **129** vs 122-124 µs (no lead) | axon **23** vs 44-49 µs (~2×; 1.6× at 4 MiB) |
 
 Two costs make up the gap:
 
@@ -128,8 +128,9 @@ competition for the vision/recording use cases.
 - **Iceoryx2 / eCAL** — true host shared-memory zero-copy pub/sub. axon *uses*
   Iceoryx2 as an optional metadata backend. They don't natively carry GPU buffers,
   and they are queue/throughput oriented. **Measured on the host** (iceoryx2 0.10, C++): within
-  about 1 µs of axon from 64 B to 4 MiB, and faster from 16 MiB, where axon's 4-buffer ring falls
-  out of L3 (16 MiB: 238 vs 474 µs). On the host, axon has no latency edge over it.
+  about 1 µs of axon from 64 B to 4 MiB, and faster from 16 MiB, where axon's time grows with its
+  ring depth (16 MiB: 238 vs 474 µs; the likely cause, cache pressure, was not measured). On the
+  host, axon has no latency edge over it.
 - **DDS + shared memory (Cyclone, Fast DDS)** — zero-copy on host via loaned
   samples; the backbone under ROS 2. Cross-node capable, GPU-agnostic.
 
@@ -216,7 +217,7 @@ Prefer a mature alternative when:
   official **`rosidl::Buffer` CUDA backend** on Lyrical or later (ros2_cuda_ipc on older
   distros), or **Isaac ROS / NITROS**. Reach for axon there only if the RT latest-value
   semantics or the per-frame GPU latency matter to you. With MPS that gap is ~20-25 µs per
-  frame. Without MPS, it is ~100 µs only for consumers that copy results out, and none for
+  frame for kernel consumers and ~10-30 µs for copying ones. Without MPS, it is ~100 µs only for consumers that copy results out, and none for
   consumers that run kernels.
 - You want a batteries-included **vision pipeline** (decode → infer → encode) →
   **DeepStream** (or **Holoscan** for low-latency sensor fusion).

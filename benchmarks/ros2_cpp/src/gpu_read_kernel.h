@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // gpu_read_kernel.h — the "consumer kernel" variant of the GPU cells (BENCH_CONSUMER_KERNEL=1).
 // Instead of copying the 16 B header and 8 B tail back with two DtoH copies, the consumer
-// launches one tiny kernel on its own stream that reads them from the frame on the GPU and
+// launches one tiny kernel on its stream (the legacy default stream for axon, ROS 2 loaned and
+// intra-process; the event-waiting stream for cudaipc and rosidl_buffer) that reads them from the frame on the GPU and
 // writes them to mapped host memory; the clock stops after the stream sync. That is what a
 // consumer that runs GPU work on the frame pays, including any switch between the producer's
 // and the consumer's GPU contexts. Driver API + inline PTX, so no nvcc is needed; usable from

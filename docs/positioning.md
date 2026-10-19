@@ -30,14 +30,22 @@ alternatives don't quite occupy:
 Measured against the two ROS 2 transports that also share GPU memory between processes
 (the official Lyrical `rosidl::Buffer` CUDA backend and ros2_cuda_ipc), axon delivers a GPU
 frame to another process in **~25 µs**. The others take **~125 µs** in the GPU's default mode
-and **35-42 µs with CUDA MPS**. Two costs make up the gap:
+and **35-56 µs with CUDA MPS**. Whether axon keeps that lead depends on the consumer and on MPS:
+
+| consumer, at 1 MiB | without MPS | with MPS |
+|---|---|---|
+| copies the result out | axon 24 vs 124-126 µs (~5×) | axon 27 vs 41-56 µs (~1.5-2×; 1.3× at 4 MiB) |
+| runs a kernel on the frame | axon **129** vs 122-124 µs (no lead) | axon **23** vs 44-49 µs (~2×; 1.6× at 4 MiB) |
+
+Two costs make up the gap:
 
 - **A descriptor over DDS, ~25-30 µs.** axon uses a shared-memory seqlock instead, so it always
   avoids this cost.
-- **~60 µs, most likely for the GPU to switch from the producer's context to the consumer's.**
-  MPS removes it, because the processes then share one context. A consumer that launches a
-  kernel on the frame most likely pays this switch with axon too: an event-free stand-in for
-  axon's handoff did. axon's 25 µs ends at a 24-byte copy back to the host.
+- **~60-100 µs for the GPU to switch from the producer's context to the consumer's.** MPS
+  removes it, because the processes then share one context. A consumer that launches a kernel
+  on the frame pays this switch with axon too (measured: 129 µs). axon's 25 µs ends at a
+  24-byte copy back to the host, which does not pay it. So **for kernel consumers, axon's GPU
+  lead needs MPS.**
 
 axon's producer host-syncs before it publishes. Written naively, that halves throughput when
 the producer also has CPU work. Pipelined, it costs no throughput in a transport-free probe,
@@ -119,7 +127,10 @@ competition for the vision/recording use cases.
 
 - **Iceoryx2 / eCAL** — true host shared-memory zero-copy pub/sub. axon *uses*
   Iceoryx2 as an optional metadata backend. They don't natively carry GPU buffers,
-  and they are queue/throughput oriented.
+  and they are queue/throughput oriented. **Measured on the host** (iceoryx2 0.10, C++): within
+  about 1 µs of axon from 64 B to 4 MiB, and faster from 16 MiB, where axon's time grows with its
+  ring depth (16 MiB: 238 vs 474 µs; the likely cause, cache pressure, was not measured). On the
+  host, axon has no latency edge over it.
 - **DDS + shared memory (Cyclone, Fast DDS)** — zero-copy on host via loaned
   samples; the backbone under ROS 2. Cross-node capable, GPU-agnostic.
 
@@ -137,10 +148,11 @@ competition for the vision/recording use cases.
   The same design as a standalone library for Humble/Jazzy, with explicit descriptors,
   buffer references held by each reader's `ReadHandle`, and a Python/DLPack subscriber.
 - **Measured** (GPU → GPU, 147 KiB-4 MiB, p50): both are ~123-127 µs and flat in size, and axon
-  is ~25 µs. With CUDA MPS they drop to 35-42 µs and axon stays at ~25 µs. Both send a DDS
+  is ~25 µs. With CUDA MPS they drop to 35-55 µs and axon stays at ~25 µs. Both send a DDS
   descriptor (~25-30 µs), which axon does not. Both also wait on a consumer-side CUDA IPC event,
   which costs ~60 µs without MPS. That ~60 µs is most likely the switch between the processes'
-  GPU contexts, not the event itself, so a kernel-launching axon consumer would pay it too. They also give things axon does
+  GPU contexts, not the event itself: a kernel-launching axon consumer pays it too (129 µs
+  without MPS, 23 µs with it). They also give things axon does
   not: an asynchronous producer, and buffers kept alive while a reader holds them instead
   of latest-value-wins. Both also carry typed ROS messages. `rosidl::Buffer` adds an
   automatic CPU fallback path; ros2_cuda_ipc needs explicit bridge nodes for CPU consumers.
@@ -158,9 +170,9 @@ competition for the vision/recording use cases.
 
 | Solution | Zero-copy GPU across processes | Coupling | Cross-node | Delivery model | Maturity |
 |---|---|---|---|---|---|
-| **axon** | Yes (CUDA VMM), **~25 µs GPU→GPU** (with or without MPS) | **None** (plain `device_ptr` / CAI) | No (single host) | **Latest-value-wins, bounded staleness** | Pre-alpha, dev-PC verified |
-| ROS 2 `rosidl::Buffer` CUDA backend | Yes (CUDA VMM + IPC events), ~124 µs GPU→GPU (~42 µs with MPS) | ROS 2 Lyrical+ | No | ROS pub/sub, CPU fallback | New (Lyrical, 0.1.x) |
-| ros2_cuda_ipc | Yes (CUDA VMM + IPC events), ~125 µs GPU→GPU (~37 µs with MPS) | ROS 2 (Humble+) | No | ROS pub/sub, reader-held buffers | Experimental |
+| **axon** | Yes (CUDA VMM), **~25 µs GPU→GPU** (copy consumer; a kernel consumer needs MPS for that, ~129 µs without) | **None** (plain `device_ptr` / CAI) | No (single host) | **Latest-value-wins, bounded staleness** | Pre-alpha, dev-PC verified |
+| ROS 2 `rosidl::Buffer` CUDA backend | Yes (CUDA VMM + IPC events), ~124 µs GPU→GPU (~42-56 µs with MPS) | ROS 2 Lyrical+ | No | ROS pub/sub, CPU fallback | New (Lyrical, 0.1.x) |
+| ros2_cuda_ipc | Yes (CUDA VMM + IPC events), ~125 µs GPU→GPU (~37-44 µs with MPS) | ROS 2 (Humble+) | No | ROS pub/sub, reader-held buffers | Experimental |
 | Isaac ROS / NITROS | Yes | ROS 2 + NVIDIA | No | ROS pub/sub | Production |
 | DeepStream | Yes | GStreamer + NVIDIA | Via streaming | Pipeline / queue | Production |
 | Holoscan | Yes | Holoscan graph + NVIDIA | Yes (RDMA) | Operator graph | Production |
@@ -204,8 +216,10 @@ Prefer a mature alternative when:
 - You are already all-in on **ROS 2** and want GPU zero-copy between nodes → the
   official **`rosidl::Buffer` CUDA backend** on Lyrical or later (ros2_cuda_ipc on older
   distros), or **Isaac ROS / NITROS**. Reach for axon there only if the RT latest-value
-  semantics or the per-frame GPU latency matter to you. That gap is ~100 µs without MPS and
-  ~10-18 µs with it.
+  semantics or the per-frame GPU latency matter to you. With MPS that gap is ~20-25 µs per
+    frame for kernel consumers and ~10-30 µs for copying ones. Without MPS, it is ~100 µs only
+  for consumers that copy results out, and none for
+  consumers that run kernels.
 - You want a batteries-included **vision pipeline** (decode → infer → encode) →
   **DeepStream** (or **Holoscan** for low-latency sensor fusion).
 - You are on **Jetson/DRIVE** and want formally-verified buffer/sync interop →

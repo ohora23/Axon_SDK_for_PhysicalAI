@@ -1,0 +1,26 @@
+# iceoryx RouDi mempools for the cyclonedds+iceoryx cells: chunks large enough for each payload
+# plus the chunk and Cyclone headers.
+[general]
+version = 1
+
+[[segment]]
+
+[[segment.mempool]]
+size = 1024
+count = 2048
+
+[[segment.mempool]]
+size = 16384
+count = 512
+
+[[segment.mempool]]
+size = 196608
+count = 64
+
+[[segment.mempool]]
+size = 1114112
+count = 32
+
+[[segment.mempool]]
+size = 4259840
+count = 32

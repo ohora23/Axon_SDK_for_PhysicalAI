@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Cyclone DDS with iceoryx shared memory (needs iox-roudi running with iox_roudi_mempools.toml).
+     Loaned messages of fixed-size types then go through iceoryx without a copy. -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <SharedMemory>
+      <Enable>true</Enable>
+      <LogLevel>warn</LogLevel>
+    </SharedMemory>
+  </Domain>
+</CycloneDDS>

@@ -16,3 +16,6 @@ results/*
 !results/sync_cost_mps_rep.jsonl
 !results/cudaipc_mps_rep.jsonl
 !results/rosidl_buffer_mps_rep.jsonl
+!results/sizes_rep.jsonl
+!results/consumer_kernel_rep.jsonl
+!results/rmw_rep.jsonl

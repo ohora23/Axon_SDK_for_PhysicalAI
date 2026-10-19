@@ -24,6 +24,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   msg/Payload8640.msg
   msg/Payload64.msg
   msg/Payload48.msg
+  msg/Payload16M.msg
+  msg/Payload64M.msg
 )
 
 # --- Benchmark executable ---
@@ -97,6 +99,18 @@ ament_target_dependencies(intra
 )
 
 target_link_libraries(intra ${cpp_typesupport_target} ${AXON_LIB} CUDA::cuda_driver rt pthread)
+
+# --- iceoryx2 comparison (optional: only when the iceoryx2 C++ bindings are installed and
+# on CMAKE_PREFIX_PATH, e.g. -DCMAKE_PREFIX_PATH=~/repositories/iceoryx2/target/ff/cc/install) ---
+find_package(iceoryx2-cxx CONFIG QUIET)
+if(iceoryx2-cxx_FOUND)
+  add_executable(iox2_bench src/iox2_bench.cpp)
+  target_compile_features(iox2_bench PRIVATE cxx_std_17)
+  target_link_libraries(iox2_bench iceoryx2-cxx::static-lib-cxx)
+  install(TARGETS iox2_bench DESTINATION lib/${PROJECT_NAME})
+else()
+  message(STATUS "iceoryx2-cxx not found: skipping iox2_bench")
+endif()
 
 # --- producer host-sync cost and GPU-side IPC event wait (CUDA kernels, needs nvcc) ---
 include(CheckLanguage)

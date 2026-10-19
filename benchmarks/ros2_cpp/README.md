@@ -13,6 +13,7 @@ documented zero-copy path, so the numbers answer the question a ROS 2 user would
 | `ros_loan` | rclcpp **loaned messages** on a fixed-size type (`msg/Payload*.msg`) + **Fast DDS data-sharing**: ROS 2's zero-copy path |
 | `axon` | axon `TensorPublisher` / `TensorSubscriber`: Custom (memfd) pool on the host, Accelerator (CUDA VMM) pool on the GPU |
 | `axon_wait` | (multi-stream only) `axon`, with the consumer blocking in `TensorSubscriber::wait_any` instead of a 1 kHz loop |
+| `iox2`, zenoh, Cyclone | (host) iceoryx2, rmw_zenoh_cpp and rmw_cyclonedds_cpp + iceoryx; see [Payload size, iceoryx2 and the other RMWs](#payload-size-iceoryx2-and-the-other-rmws-host) |
 | `rosidl_buffer`, `cudaipc` | (GPU only) the official ROS 2 `rosidl::Buffer` CUDA backend and ros2_cuda_ipc; see [GPU → GPU against the other GPU zero-copy transports](#gpu--gpu-against-the-other-gpu-zero-copy-transports) |
 
 **Fast DDS profile.** Every ROS 2 cell runs with [`fastdds_zero_copy.xml`](fastdds_zero_copy.xml)
@@ -160,13 +161,12 @@ descriptor travelling over DDS, which axon does not pay.
 
 This changes what the headline means:
 
-- **axon's 24-26 µs is the time to the consumer's 24 B readback, a copy.** The copy did not pay
-  the context switch here, with or without MPS. A consumer that *launches a kernel* on the
-  frame will most likely pay it with axon too, as the event-free row does: about 60-70 µs
-  without MPS, and 8-17 µs with it. That row includes the pipe and the consumer's wake-up. It
-  was measured with a pipe, not through axon.
-- **With MPS, the GPU-sharing ROS 2 transports land at 35-42 µs**, about 1.5× axon. The
-  remaining difference is the DDS descriptor.
+- **axon's 24-26 µs is the time to the consumer's 24 B readback, a copy.** The copy does not pay
+  the context switch, with or without MPS. A consumer that *launches a kernel* on the frame
+  pays it with axon too; see [When the consumer runs a kernel](#when-the-consumer-runs-a-kernel).
+- **With MPS, the GPU-sharing ROS 2 transports land at 35-56 µs** and axon at 24-29 µs, across
+  the #47/#48 sessions and this one (here: 38-56 against 27-29).
+  The remaining difference is the DDS descriptor.
 - MPS is not the default. It runs one server per user, so containers must run as the same
   user and share its pipe directory. Every client shares one GPU context, so a fault in one
   client hits the others. Use it where that isolation trade-off is acceptable, which is often
@@ -177,8 +177,47 @@ This changes what the headline means:
 export CUDA_MPS_PIPE_DIRECTORY=$HOME/mps-pipe CUDA_MPS_LOG_DIRECTORY=$HOME/mps-log
 mkdir -p $CUDA_MPS_PIPE_DIRECTORY $CUDA_MPS_LOG_DIRECTORY && nvidia-cuda-mps-control -d
 # the Lyrical container then needs: --user "$(id -u):$(id -g)" -v $CUDA_MPS_PIPE_DIRECTORY:/mps-pipe -e CUDA_MPS_PIPE_DIRECTORY=/mps-pipe
-# (and -v for lyrical/run.sh and fastdds_zero_copy.xml, which the image keeps root-only)
 ```
+
+### When the consumer runs a kernel
+
+With `BENCH_CONSUMER_KERNEL=1`, the consumer reads the 24 B with one tiny kernel on the consumer's
+stream instead of two DtoH copies ([`src/gpu_read_kernel.h`](src/gpu_read_kernel.h), inline
+PTX, results written to mapped host memory). For the event-based transports, that kernel is
+queued behind the event wait on the same stream. axon, ROS 2 loaned and intra-process launch it on
+the legacy default stream and wait with `cuCtxSynchronize`. This is what a consumer that runs inference
+on the frame pays first. Every cell was measured in one session, with and without MPS, 3 runs,
+500/500 delivered, 0 torn, 0 CPU fallbacks. p50 µs (median of 3) at 1 MiB. At 147 KiB and 4 MiB
+every row is within ±7 µs of it, except ROS 2's host-memory path, which grows with size
+(45-52 µs at 147 KiB, 481-505 µs at 4 MiB):
+
+| transport | copy, default | **kernel, default** | copy, MPS | **kernel, MPS** |
+|---|---|---|---|---|
+| **axon** | 24 | **129** | 27 | **23** |
+| `cudaipc` | 124 | 122 | 41 | 44 |
+| `rosidl_buffer` | 126 | 124 | 56 | 49 |
+| ROS 2 loaned + data-sharing (host memory) | 167 | 176 | 167 | 178 |
+| ROS 2 intra-process, same process (`ros_intra_poll`) | 29 | 25 | 37 | 32 |
+
+- **Without MPS, a kernel-launching axon consumer is as slow as the event-based transports:**
+  129 µs against 122-124 µs. The ~100 µs switch between the producer's and consumer's GPU
+  contexts is paid by whoever touches the frame with a kernel first. The event designs paid it
+  inside their event wait, so their kernel cells barely change. axon's copy-only cell never
+  paid it.
+- **With MPS, axon's lead holds for kernel consumers:** 22-26 µs against 41-51 µs, 1.6-2.2×
+  depending on size.
+- **Inside one process there is no context switch.** The intra-process kernel cell is 25 µs
+  without MPS. MPS adds 3-8 µs there, and to axon's copy cell.
+- **p99:** axon's kernel cell without MPS is 140-142 µs. With MPS, axon's kernel cell is 34-37 µs,
+  against 68-86 µs for the GPU-sharing transports. A short 100-frame smoke run once showed a
+  1 ms p99 for axon without MPS; the gated runs did not.
+
+So for GPU consumers that run kernels, axon's GPU advantage over the GPU-sharing ROS 2
+transports **needs MPS**. Without MPS, it remains only for consumers that copy results out, or
+against ROS 2's host-memory path.
+
+Raw data: `results/consumer_kernel_rep.jsonl` (`"mps"` and `"consumer_kernel"` on every consumer line),
+from `run_gated.sh gpu`.
 
 ### The producer's host-sync
 
@@ -239,6 +278,64 @@ colcon build`) and sourced before this package; `cudaipc_bench` is only built wh
 The Lyrical image satisfies the backend's `libnvidia-compute-595` dependency with an empty
 package and uses the host driver mounted by the NVIDIA runtime.
 
+## Payload size, iceoryx2 and the other RMWs (host)
+
+The same single-stream cell (busy-polling consumer, payload written in full, 3 runs, median
+p50 µs) from 64 B to 64 MiB. 64 B and 8640 B run at 1 kHz for 2000 frames, 147 KiB-4 MiB at
+100 Hz for 500, and 16 and 64 MiB at 30 Hz for 300. The cells add:
+
+- **`iox2`:** Eclipse iceoryx2 v0.10.0, C++ bindings ([`src/iox2_bench.cpp`](src/iox2_bench.cpp)).
+  A zero-copy slice loaned from shared memory; subscriber buffer 1 with safe overflow, the same
+  latest-value delivery as the others.
+- **rmw_zenoh_cpp 0.2.11** with its shared memory switched on ([`zenoh_shm_session.json5`](zenoh_shm_session.json5);
+  ROS ships it off). It has no loaned messages (`can_loan_messages=0`), so it runs the
+  `UInt8MultiArray` cell, which is serialized into shared memory. One cell at 1 MiB has SHM off,
+  for comparison.
+- **rmw_cyclonedds_cpp 2.2.4 + iceoryx** ([`cyclonedds_shm.xml`](cyclonedds_shm.xml), RouDi with
+  [`iox_roudi_mempools.toml`](iox_roudi_mempools.toml)): loaned messages of the fixed-size types.
+  Without iceoryx, Cyclone refuses the loans (`can_loan_messages=0`), so these cells did go
+  through it.
+
+| payload | **axon** | `iox2` | Fast DDS loaned + data-sharing | Cyclone + iceoryx, loaned | zenoh SHM, serialized |
+|---|---|---|---|---|---|
+| 64 B | **0.3** | 0.6 | 6.3 | 4.7 | 17.4 |
+| 8640 B | **0.4** | 0.6 | 5.8 | 4.8 | 18.6 |
+| 147 KiB | **4.3** | 5.2 | 22.4 | 17.4 | 63.0 |
+| 1 MiB | **15.4** | 16.5 | 33.9 | 30.9 | 125.5 (SHM off: 242) |
+| 4 MiB | 59.2 | 59.3 | 75.4 | 73.8 | 344.9 |
+| 16 MiB | 474 | **238** | 304 | not run¹ | 1495 |
+| 64 MiB | 3271 | **2348** | 3050 | not run¹ | not run |
+
+¹ The RouDi mempools in `iox_roudi_mempools.toml` stop at 4 MiB chunks. The axon, `iox2` and
+Fast DDS columns come from the `sizes` session, Cyclone and zenoh from the `rmw` session. In the
+`rmw` session, Fast DDS loaned (34.4 µs) and axon (15.3 µs) at 1 MiB match the `sizes` session.
+
+Every cell delivered every frame with 0 torn, except zenoh: two runs missed frame 1 (setup), and
+one 8640 B run lost one frame at 1 kHz. The serialized Fast DDS cell (`UInt8MultiArray`) is
+125 µs at 1 MiB, the same as zenoh with SHM.
+
+- **Up to 4 MiB, iceoryx2 is as fast as axon on the host.** It is within about 1 µs of axon from 64 B to 4 MiB.
+  The loaned ROS 2 paths (Fast DDS, Cyclone + iceoryx) add 4-19 µs per message. axon's
+  host advantage over a plain shared-memory transport is therefore not latency. It is what sits
+  around the transport: dma-buf/V4L2 and CUDA buffer pools, the GPU handoff, and RT
+  latest-value semantics.
+- **From 16 MiB, axon is the slowest of the zero-copy paths on the host** (16 MiB: axon 474,
+  iceoryx2 238, Fast DDS loaned 304 µs). The time grows with axon's ring depth. With
+  `AXON_BENCH_NBUF` 1/2/3/4 at 16 MiB, p50 was 271/400/537/592 µs (one run each; the gated
+  4-buffer median is 474, so these single runs are noisy). The likely cause is last-level-cache
+  pressure on the producer's write, but that was not measured. One buffer comes within about
+  15 % of iceoryx2. A shallower ring, though, makes a torn frame more likely for a slow reader
+  (see [docs/usage.md](../../docs/usage.md) on ring sizing). At 64 MiB, a 1-buffer ring is still
+  2803 µs against iceoryx2's 2348 µs; why was not traced.
+- **zenoh's shared memory halves its latency** (242 → 125 µs at 1 MiB), but without loans it
+  stays a serialized path.
+
+**GPU → GPU at 16 and 64 MiB** (axon vs Fast DDS loaned, 30 Hz): axon 36 / 184 µs, ROS 2
+1769 / 6959 µs. axon's time now includes the producer's own 16-64 MiB device copy.
+
+Raw data: `results/sizes_rep.jsonl` (`run_gated.sh sizes`) and `results/rmw_rep.jsonl`
+(`run_gated.sh rmw`, tagged with `rmw`). Both were measured on 2026-10-20 with 10 CPUs online.
+
 ## Multi-stream: CPU, latency, delivery and cache misses
 
 `mstream` runs the [`benchmarks/mock`](../mock/README.md) robot workload in C++: four 640×480×2 camera/depth streams at
@@ -293,7 +390,7 @@ What this says:
 - **None of the transports is flat in bandwidth:** from scale 1 to 4, axon goes from 0.007 to 0.015 cores (the
   producer's payload writes), `ros_loan` from 0.031 to 0.038, `ros_dyn` from 0.038 to 0.077. Run-to-run spread for the
   ROS 2 cells is up to ±30 %.
-- **Not covered:** consumers that read the whole frame, the EventsExecutor, `rmw_zenoh`. Intra-process ROS 2 and 1 → N fan-out are in the sections below.
+- **Not covered:** consumers that read the whole frame, the EventsExecutor. Intra-process ROS 2 and 1 → N fan-out are in the sections below.
 
 ```bash
 benchmarks/ros2_cpp/run_mstream.sh                 # 5 s per cell, scales 1-4

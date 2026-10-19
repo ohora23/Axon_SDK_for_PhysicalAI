@@ -40,6 +40,8 @@ inline std::size_t fastdds_shm_segment_bytes() {
 // payload must leave headroom. ponytail: "at most half the segment" is a
 // conservative heuristic, not Fast DDS's exact overhead.
 inline void require_fits_shm_segment(std::size_t bytes, const char* what) {
+    const char* rmw = std::getenv("RMW_IMPLEMENTATION");  // the limit is Fast DDS's; other RMWs are not checked
+    if (rmw && std::string(rmw) != "rmw_fastrtps_cpp") return;
     const std::size_t seg = fastdds_shm_segment_bytes();
     if (bytes <= seg / 2) return;
     std::fprintf(stderr,

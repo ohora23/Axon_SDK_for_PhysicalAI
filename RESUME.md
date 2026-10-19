@@ -1,7 +1,7 @@
 # 다음 세션에서 이어서 작업하기
 
 > 본 문서는 Axon 작업을 다른 시점/세션에서 이어가기 위한 **현황 + 체크리스트 + 명령어 모음**입니다.
-> 마지막 갱신: 2026-10-19 (main = `828d04a`, PR #48까지 머지 — 같은 프로세스·host-sync·fan-out·MPS 비교)
+> 마지막 갱신: 2026-10-20 (PR #49까지 머지 — 소비자 커널, 64 B~64 MiB, iceoryx2, rmw_zenoh, Cyclone+iceoryx)
 
 ---
 
@@ -39,6 +39,7 @@
 | 공정 벤치 | C++ rclcpp로 ROS 2 zero-copy(loaned + Fast DDS data-sharing)와 비교 (`benchmarks/ros2_cpp/`): host 1 MiB 15 vs 36 µs, GPU→GPU 4 MiB 26 vs 485 µs, 다중스트림(297 MB/s) 카메라 p50 29 vs 44 µs·CPU 0.019 vs 0.038 cores. 기존 수치는 rclpy 대비였음 | #43, #44, #46 |
 | 경쟁 비교 | GPU→GPU를 ROS 2 공식 `rosidl::Buffer` CUDA 백엔드(Lyrical, Docker)와 ros2_cuda_ipc와 직접 비교: 둘 다 약 124 µs, axon 약 25 µs. 차이는 DDS descriptor(24~32 µs)와 소비자 측 CUDA IPC event 대기(61~72 µs). axon은 생산자가 host-sync하는 대가 | #47 |
 | 추가 비교 | 같은 프로세스 ROS 2(intra-process)보다 프로세스 간 axon이 느리지 않음(spin 4~5.5 µs, 둘 다 blocking 1.3~2 µs 빠름). 생산자 host-sync는 파이프라인으로 짜면 처리량 손실 없음. 구독자 1→8(GPU 1 MiB) axon 25→38 µs vs ROS 2 154→450 µs. **CUDA MPS를 켜면 GPU 공유 전송과의 차이가 5×에서 1.5×로 줄어든다**(rosidl::Buffer 42, ros2_cuda_ipc 37, axon 25 µs). 약 60 µs는 프로세스 간 GPU 컨텍스트 전환으로 추정. 측정은 `run_gated.sh`(다른 GPU·CPU 사용 시 단위 재측정), 깊은 C-state는 PM QoS 0 | #48 |
+| 남은 비교 | 소비자가 커널을 실행하면 MPS 없이는 axon 이점 없음(129 vs 122~124 µs), MPS에서는 1.6~2.2×(23 vs 44~49 µs). host 경로는 iceoryx2 0.10과 4 MiB까지 동등, 16 MiB부터는 axon이 느림(ring 깊이). Cyclone+iceoryx loan 31 µs, zenoh SHM 125 µs(직렬화). GPU 16/64 MiB axon 36/184 µs vs ROS 2 1.8/7.0 ms. `run_gated.sh gpu/sizes/rmw` | #49 |
 | 이벤트 대기 | `TensorSubscriber::wait_for_update` / `wait_any`(futex, `futex_waitv`), 크기 한도 위반 시 조용한 드롭 제거(`publish()` -1/EMSGSIZE, `create()` E2BIG, Python 예외) | #46 |
 
 ---
@@ -47,7 +48,7 @@
 
 - [ ] **PREEMPT_RT 커널에서 `cyclictest` 1 kHz jitter 측정** — **진행 중, 보드 다운**: 기준선(stock 커널) 최악 1,138 µs(무부하)/1,263 µs(부하). 직접 빌드한 `5.10.216-rt108-tegra`로 재부팅한 뒤 hermes-head가 응답하지 않음. 콘솔에서 부팅 메뉴 `primary kernel` 선택 → `/boot/extlinux/extlinux.conf`의 `DEFAULT`를 `primary`로 복구 → `journalctl -b -1`로 원인 확인. 빌드·설치·측정 스크립트: `instrumentation/jetson/rt/` (#42), 결과 문서 `docs/hardware-verification.md` §7. 빌드 산출물은 호스트 `~/z_Setup_NvidiaXavier/rt-kernel/`
 - [ ] **ROS Discourse 글** — 사용자가 게시하지 않기로 함(2026-10-19). 초안 `.omc/discourse_draft.md`는 #48의 MPS 결과(5× → 1.5×)를 반영하지 않았음
-- [ ] **남은 경쟁 비교** — Iceoryx2, `rmw_zenoh` 공유 메모리(host 경로), NITROS, rmw_cyclonedds+iceoryx, 카메라 캡처→추론 end-to-end, 16~64 MiB, 부하 시 꼬리 지연. 소비자가 커널을 띄우는 셀(axon 포함)도 직접 측정 필요(지금은 pipe 대체 probe)
+- [ ] **남은 비교** — 카메라 캡처→추론 end-to-end(보드 필요), 부하 시 꼬리 지연. NITROS는 Isaac ROS 5.0에서 `rosidl::Buffer` CUDA 백엔드로 대체됨(#47에서 측정한 경로). 큰 페이로드에서 axon ring 깊이 원인(캐시) 측정과 기본값 조정 검토
 - [ ] **개발 PC 주의** — 9800X3D 물리 코어 2~4 불량 의심, `cpu-offline-cores.service`로 CPU 2·3·4·10·11·12를 끈 상태. 벤치마크에 코어 상태를 기록할 것. CPU RMA 예정(Obsidian `Tasks/Hardware/CPU RMA 자료 …`)
 - [ ] **Jetson에서 `wait_any` 확인** — r35 커널 5.10에는 `futex_waitv`가 없어 100 µs 폴링으로 동작. 보드 복구 후 테스트
 - [ ] **AMD XDNA 백엔드** (`AXON_ENABLE_AMD_XDNA`) — 하드웨어 없음 (이 PC 9800X3D엔 NPU 없음)

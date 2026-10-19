@@ -19,3 +19,4 @@ results/*
 !results/sizes_rep.jsonl
 !results/consumer_kernel_rep.jsonl
 !results/rmw_rep.jsonl
+!results/ring_perf_rep.jsonl

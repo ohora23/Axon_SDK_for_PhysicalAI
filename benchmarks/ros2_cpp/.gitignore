@@ -25,3 +25,4 @@ results/*
 !results/ring_perf_first_rep.jsonl
 !results/clock_probe.txt
 !results/ring_perf_second_rep.jsonl
+!results/src_offset_probe.txt

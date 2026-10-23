@@ -1,0 +1,8 @@
+# 2026-10-23, 64 MiB host, 150 frames at 30 Hz, AXON_BENCH_NBUF=1, unpinned, default C-states.
+# BENCH_SRC_OFFSET moves the producer's source; BENCH_ADDR_LOG prints src/dst mod 4096. p50 µs, 3 runs.
+axon     src%4096=16   dst%4096=0    2433.7 2470.7 2429.1   (default)
+axon     src%4096=3928 dst%4096=0    2479.1 2457.3 2530.2   (dst-src = 168, as iceoryx2)
+axon     src%4096=2048 dst%4096=0    2522.0 2485.9 2461.3
+axon     src%4096=0    dst%4096=0    2531.3 2466.7 2624.5
+iox2     src%4096=16   dst%4096=184  2480.4 2518.8 2516.0   (default)
+iox2     src%4096=200  dst%4096=184  2576.8 2513.1 2512.2   (dst-src = -16, as axon)

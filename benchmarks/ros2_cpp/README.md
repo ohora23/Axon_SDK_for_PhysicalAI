@@ -361,6 +361,10 @@ is pinned to CPU 6 and the consumer to CPU 7, two different physical cores. PM Q
   was neither pinned nor under PM QoS. Two later unpinned runs had axon and iceoryx2 within 3 %
   at 64 MiB: 2100 vs 2099 µs (`ring_perf_second_rep.jsonl`) and 2067 vs 2120 µs
   (`ring_perf_unpinned_rep.jsonl`).
+- **4 KiB aliasing between the source and destination is not a factor.** axon's destination is
+  page-aligned and 16 B from the source's page offset, iceoryx2's is 168 B. Moving the source
+  (`BENCH_SRC_OFFSET`) to any of four offsets left the 64 MiB p50 within run-to-run noise, for
+  both (`results/src_offset_probe.txt`).
 - In practice, a host payload of several MiB or more wants the shallowest ring its readers
   allow; 2 buffers is the cheap middle ground. The benchmark keeps 4 for every size, to keep
   one rule.

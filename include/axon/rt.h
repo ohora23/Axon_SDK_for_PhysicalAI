@@ -103,4 +103,14 @@ int rt_prefault_dma_buf_view(void* mapped_view, std::size_t size) noexcept;
 // CLOCK_MONOTONIC_RAW via vDSO — RT-safe.
 std::uint64_t rt_now_ns() noexcept;
 
+// Sleep until spin_us before deadline_ns (rt_now_ns() clock), then busy-wait to deadline_ns.
+// Returns rt_now_ns() on return, which is >= deadline_ns; a past deadline returns at once, and
+// spin_us = 0 is a plain sleep. For a low-rate periodic producer: a core that wakes from idle can
+// run the next frame at a lower clock, and being busy just before the frame avoids that. On one
+// Ryzen 9800X3D (amd-pstate-epp), a 30 Hz producer writing 16 MiB had p90 419 µs with a 1 µs
+// CpuLatencyHold and 212-216 µs with spin_us = 2000 and no hold, for ~6 % of a core
+// (docs/usage.md). The spin must be longer than the CPU's clock ramp; 250 µs did nothing there.
+// The sleep part is clock_nanosleep(CLOCK_MONOTONIC): EINTR is retried. No allocation.
+std::uint64_t rt_sleep_until_prewarmed(std::uint64_t deadline_ns, std::uint32_t spin_us) noexcept;
+
 }  // namespace axon

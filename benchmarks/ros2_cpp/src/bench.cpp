@@ -549,9 +549,8 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
         }
         return out;
     };
-    // BENCH_PREWAKE_US=<us>: sleep until that long before each frame, then busy-wait to the frame time
-    // (a bare loop on purpose: the point is to keep the core busy).
-    const std::uint64_t prewake_ns = std::getenv("BENCH_PREWAKE_US") ? std::strtoull(std::getenv("BENCH_PREWAKE_US"), nullptr, 10) * 1000 : 0;
+    // BENCH_PREWAKE_US=<us>: axon::rt_sleep_until_prewarmed, spinning that long before each frame.
+    const std::uint32_t prewake_us = std::getenv("BENCH_PREWAKE_US") ? (std::uint32_t)std::strtoul(std::getenv("BENCH_PREWAKE_US"), nullptr, 10) : 0;
 
     struct timeval tv0, tv1;
     gettimeofday(&tv0, nullptr);
@@ -594,12 +593,8 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
         pub->publish(std::move(a));
         if (frame_log) fl_idle.push_back(read_idle());
         const std::uint64_t next = t0 + (std::uint64_t)(1e9 / rate_hz);
-        if (prewake_ns) {  // wake early and spin, so the core is busy when the frame starts
-            sleep_until(next - prewake_ns);
-            while (axon::rt_now_ns() < next) {}
-        } else {
-            sleep_until(next);
-        }
+        if (prewake_us) axon::rt_sleep_until_prewarmed(next, prewake_us);
+        else sleep_until(next);
     }
 
     gettimeofday(&tv1, nullptr);

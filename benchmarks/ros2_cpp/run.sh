@@ -12,8 +12,8 @@ ROS_SETUP="/opt/ros/jazzy/setup.bash"
 
 # Build axon core with CUDA, every time: the bench compiles against include/ and links the static
 # library, so a stale libaxon.a with an older class layout breaks at run time, not at link time.
-[ -f "$REPO/build-cuda/CMakeCache.txt" ] || cmake -S "$REPO" -B "$REPO/build-cuda" -DCMAKE_BUILD_TYPE=Release -DAXON_WITH_CUDA=ON
-cmake --build "$REPO/build-cuda" -j"$(nproc)"
+[ -f "$REPO/build-cuda/CMakeCache.txt" ] || cmake -S "$REPO" -B "$REPO/build-cuda" -DCMAKE_BUILD_TYPE=Release -DAXON_WITH_CUDA=ON || exit 1
+cmake --build "$REPO/build-cuda" -j"$(nproc)" || { echo "[run] axon core build failed" >&2; exit 1; }
 
 # Source ROS
 source "$ROS_SETUP"

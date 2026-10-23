@@ -49,7 +49,7 @@ struct RtSetupConfig {
 // max_latency_us is the deepest idle state's exit latency allowed. 0 permits only polling idle:
 // the core spins, at the most power. 1 permits the shallowest halt state (C1). On that machine
 // (one PC, 2 runs per setting) 1 kept 4.6-5.0 GHz, against 5.2 GHz for 0 and 3.0-3.6 GHz for
-// 20 (C2). So 1 is the usual choice for the median, but 26-30 % of frames still ran at half clock
+// 20 (C2). So 1 is the usual choice for the median, but 26-30 % of frames still ran at about half clock
 // (p90 about 2x p50); only 0, or waking ~2 ms early and spinning, removed that tail (docs/usage.md).
 // See /sys/devices/system/cpu/cpu0/cpuidle/state*/{name,latency} for a machine.
 class CpuLatencyHold {

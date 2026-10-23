@@ -173,13 +173,14 @@ decides low-rate host numbers"):
 most of the gain at the median: idle cores halt instead of spinning, as they would with polling
 (0), and the other cores keep their deep idle states.
 
-The averages hide a tail. Per frame, the write ran at either the full clock or exactly half of
-it, and under the 1 µs limit 26-30 % of frames still ran at half: p50 212 µs, but **p90 419 µs**.
-Only polling (0 µs) removed it. The CPU raises a core's clock after about 1-2 ms of being busy,
-so a producer that cares about its tail can instead wake early and spin: sleeping until 2 ms
+The averages hide a tail. Per frame, most writes ran at either the full clock or half of it,
+and under the 1 µs limit 26-30 % of frames still ran below 4 GHz: p50 212 µs, but **p90 419 µs**.
+Of the limits, only polling (0 µs) removed it. On that machine, a core that had been busy for
+2 ms before the write always ran it at full clock, so a producer that cares about its tail can
+instead wake early and spin: sleeping until 2 ms
 before each frame, then busy-waiting to the frame time, gave p50 210 µs and p90 212-216 µs with
 no limit at all, for about 6 % of a core at 30 Hz. Spinning less than the work itself does
-nothing (250 µs: p90 423 µs). The numbers are for one Ryzen 9800X3D with `amd-pstate-epp`;
+nothing (250 µs: p90 423-424 µs). The numbers are for one Ryzen 9800X3D with `amd-pstate-epp`;
 measure the ramp on the target with `benchmarks/ros2_cpp/run_frame_clock_probe.sh`.
 
 | producer setup | p50 | p90 |

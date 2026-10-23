@@ -440,13 +440,17 @@ machine with 2 runs per row. The per-CPU rows come from the second session only,
 system-wide rows from both, so treat small differences between them as noise.
 
 **A 1 µs limit fixes the median, not the tail** ([`run_frame_clock_probe.sh`](run_frame_clock_probe.sh),
-`results/frame_clock.jsonl`). The averages above hide that each frame runs at one of two clocks.
+`results/frame_clock.jsonl`). The averages above hide that most frames run at one of two clocks.
 The probe logs, per frame, the consumer's latency and the producer's write time and cycles
-(`BENCH_SAMPLE_LOG`, `BENCH_FRAME_LOG`). Every write ran at 5.22 GHz or at exactly half, 2.61 GHz,
-and kept that clock to its end (210 or about 420 µs). Same setup as above, 2 runs of 280 timed
-frames each, settings interleaved:
+(`BENCH_SAMPLE_LOG`, `BENCH_FRAME_LOG`). Most writes ran at 5.22 GHz (210 µs) or at half,
+2.61 GHz (about 420 µs). The rest averaged in between, with write times in between too: the clock
+rose during the write. That was 7-8 % of frames under a 1 µs limit, 10-15 % with no limit or 20 µs, and 30-33 % with a
+250 µs to 1 ms pre-wake spin; there were none with polling or a spin of 2 ms or more. Same producer, consumer and
+CPUs as above, plus the per-frame logging (two counter reads around the write, and a read of 16
+sysfs counters after each publish); 2 runs of 280 timed frames each, settings interleaved. CPUs
+2-4 and 10-12 were offline.
 
-| setting | p50 µs | p90 µs | frames at half clock |
+| setting | p50 µs | p90 µs | frames below 4 GHz |
 |---|---|---|---|
 | no limit | 419-430 | 424-549 | 74-98 % |
 | 20 µs (C2) | 419 | 425 | 93-98 % |
@@ -459,11 +463,13 @@ frames each, settings interleaved:
 | ... 4 ms | 210 | 213 | 0 % |
 | 1 µs and 1 ms spin | 210-212 | 239-300 | 6-12 % |
 
-The clock is the frequency the CPU picks for a core that has been idle (`amd-pstate-epp`, active
-mode, EPP `performance`). It does not follow from the idle state alone: under the 1 µs limit
-every sleep went through C1, fast and slow frames alike, and the number of C1 entries per sleep
-(tens to tens of thousands, varying from run to run) does not separate them. What brings the
-clock back is the core being busy for about 1-2 ms before the write starts. Spinning 2 ms ahead
+The frequency is chosen by the CPU and its firmware (`amd-pstate-epp`, active mode, EPP
+`performance`); this probe does not see how. It does not follow from the idle state alone: under
+the 1 µs limit every sleep went through C1, fast and slow frames alike. The C1 entries per sleep
+ranged from 2 to about 78,000 (around 30,000 in one run, around 30 in the other, as if something
+kept waking that core in the first), and do not separate fast from slow frames within a run. What
+did predict the clock on this machine was how long the core had been busy before the write:
+after 2 ms or more, every frame ran at full clock. Spinning 2 ms ahead
 of each frame (`BENCH_PREWAKE_US=2000`) matches polling idle with no PM QoS at all, for 2 ms of
 a core per 33 ms frame instead of a core that never halts. Spinning for less than the write
 itself (250 µs) does almost nothing. This is one machine and one cpufreq setup; another CPU or

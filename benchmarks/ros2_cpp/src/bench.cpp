@@ -513,8 +513,10 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
         check_cuda(cuMemcpyHtoD(d_src, srcp, bytes), "cuMemcpyHtoD src");
     }
 
-    // BENCH_FRAME_LOG=<path> (host only): per frame, the payload write's duration and the cycles it
-    // took on this thread (perf_event_open, needs kernel.perf_event_paranoid <= 1), written at exit.
+    // BENCH_FRAME_LOG=<path> (host only, pinned producer): per frame, the payload write's duration
+    // and the cycles it took on this thread (perf_event_open, needs kernel.perf_event_paranoid <= 1),
+    // written at exit. ponytail: the counter is read unscaled; if another perf user multiplexes the
+    // PMU, cycles read low and look like a slow clock. Check with no other perf session running.
     const char* frame_log = gpu == 0 ? std::getenv("BENCH_FRAME_LOG") : nullptr;
     int cyc_fd = -1;
     if (frame_log) {
@@ -525,9 +527,11 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
     }
     auto read_cycles = [&] { std::uint64_t v = 0; if (::read(cyc_fd, &v, 8) != 8) v = 0; return v; };
     std::vector<std::uint64_t> fl_ns, fl_cyc;
+    if (frame_log) { fl_ns.reserve(frames); fl_cyc.reserve(frames); }
     // ... and, after each publish, this CPU's cpuidle usage/time counters, so the log shows which
     // idle states the sleep before each frame went through (diff consecutive lines).
     std::vector<std::string> fl_idle;
+    if (frame_log) fl_idle.reserve(frames);
     auto read_idle = [] {
         std::string out;
         const int cpu = sched_getcpu();
@@ -545,7 +549,8 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
         }
         return out;
     };
-    // BENCH_PREWAKE_US=<us>: sleep until that long before each frame, then busy-wait to the frame time.
+    // BENCH_PREWAKE_US=<us>: sleep until that long before each frame, then busy-wait to the frame time
+    // (a bare loop on purpose: the point is to keep the core busy).
     const std::uint64_t prewake_ns = std::getenv("BENCH_PREWAKE_US") ? std::strtoull(std::getenv("BENCH_PREWAKE_US"), nullptr, 10) * 1000 : 0;
 
     struct timeval tv0, tv1;
@@ -589,7 +594,7 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
         pub->publish(std::move(a));
         if (frame_log) fl_idle.push_back(read_idle());
         const std::uint64_t next = t0 + (std::uint64_t)(1e9 / rate_hz);
-        if (prewake_ns && next > prewake_ns) {  // wake early and spin, so the core is busy when the frame starts
+        if (prewake_ns) {  // wake early and spin, so the core is busy when the frame starts
             sleep_until(next - prewake_ns);
             while (axon::rt_now_ns() < next) {}
         } else {

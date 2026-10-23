@@ -4,7 +4,8 @@
 # cycles (BENCH_FRAME_LOG, perf_event_open: needs kernel.perf_event_paranoid <= 1) and the C1
 # entries during the sleep before it. Settings, interleaved per round: no limit, CpuLatencyHold on
 # CPU 6 at 20 / 1 / 0 µs, and waking early to spin (BENCH_PREWAKE_US) for 250 µs to 4 ms.
-# Per-CPU holds need tools/udev/99-axon-cpu-latency.rules without root.
+# Per-CPU holds need tools/udev/99-axon-cpu-latency.rules without root. Build first (run.sh): this
+# script uses install/ as it is.
 #   run_frame_clock_probe.sh [rounds=2]  ->  results/frame_clock.jsonl (one line per run)
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
 ROUNDS="${1:-2}"; OUT="${OUT:-results/frame_clock.jsonl}"
@@ -13,12 +14,18 @@ B=install/axon_bench/lib/axon_bench; T="${GATED_TMP:-$HOME/.cache/axon-gated}/fc
 Q=/sys/devices/system/cpu/cpu6/power/pm_qos_resume_latency_us
 [ "$(cat "$Q")" = 0 ] || { echo "CPU 6 already has a wake-up limit ($(cat "$Q")): a leftover hold? write 0 first" >&2; exit 1; }
 echo "{\"meta\":\"frame_clock\",\"date\":\"$(date -Is)\",\"cpus_online\":\"$(cat /sys/devices/system/cpu/online)\",\"driver\":\"$(cat /sys/devices/system/cpu/cpu6/cpufreq/scaling_driver)\",\"epp\":\"$(cat /sys/devices/system/cpu/cpu6/cpufreq/energy_performance_preference)\"}" > "$OUT"
-sp=""; trap 'kill $sp 2>/dev/null' EXIT INT TERM
+sp=""
+trap 'kill $sp 2>/dev/null' EXIT
+trap 'kill $sp 2>/dev/null; echo 0 > "$Q" 2>/dev/null; exit 130' INT TERM  # a killed pub cannot restore its hold
 one() { local label=$1 round=$2; shift 2
-  BENCH_SAMPLE_LOG=$T/s taskset -c 7 $B/bench sub axon 16777216 300 30 0 > /dev/null 2>&1 & sp=$!; sleep 1
-  env "$@" BENCH_FRAME_LOG=$T/p taskset -c 6 $B/bench pub axon 16777216 300 30 0 > /dev/null 2>&1; wait $sp; sp=""
+  rm -f "$T/p" "$T/s"
+  BENCH_SAMPLE_LOG="$T/s" taskset -c 7 "$B/bench" sub axon 16777216 300 30 0 > /dev/null 2> "$T/sub.err" & sp=$!; sleep 1
+  env "$@" BENCH_FRAME_LOG="$T/p" taskset -c 6 "$B/bench" pub axon 16777216 300 30 0 > /dev/null 2> "$T/pub.err" \
+    || { echo "pub failed ($label):" >&2; cat "$T/pub.err" >&2; exit 1; }
+  wait $sp || { echo "sub failed ($label):" >&2; cat "$T/sub.err" >&2; exit 1; }; sp=""
   [ "$(cat "$Q")" = 0 ] || { echo "hold on CPU 6 not restored after $label" >&2; exit 1; }
-  python3 -I - "$label" "$round" $T/p $T/s >> "$OUT" <<'PY'
+  [ -s "$T/p" ] && [ -s "$T/s" ] || { echo "no per-frame log from $label (stale install/?)" >&2; exit 1; }
+  python3 -I - "$label" "$round" "$T/p" "$T/s" >> "$OUT" <<'PY'
 import json, sys
 label, rnd, pub, sub = sys.argv[1:5]
 # pub line: seq write_ns cycles, then (usage time) per idle state, read after that frame's publish

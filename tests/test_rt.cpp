@@ -11,6 +11,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <string>
 
@@ -24,6 +25,30 @@ AXON_TEST(now_ns_monotonic) {
     std::uint64_t b = rt_now_ns();
     CHECK(a != 0);
     CHECK(b >= a);
+}
+
+// Sleeps for most of the wait and spins only the tail: reaches the deadline, and uses far less CPU
+// time than wall time. A past deadline returns at once; spin_us = 0 is a sleep. Only the upper CPU
+// bound is checked: preemption during the spin (a loaded CI host) lowers thread CPU time.
+AXON_TEST(sleep_until_prewarmed) {
+    auto cpu_ns = [] {
+        struct timespec ts;
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+        return static_cast<std::uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<std::uint64_t>(ts.tv_nsec);
+    };
+    const std::uint64_t t0 = rt_now_ns(), c0 = cpu_ns();
+    const std::uint64_t deadline = t0 + 30'000'000;  // 30 ms, 2 ms of it spun
+    const std::uint64_t r = rt_sleep_until_prewarmed(deadline, 2000);
+    const std::uint64_t cpu = cpu_ns() - c0;
+    CHECK(r >= deadline);
+    CHECK(rt_now_ns() >= deadline);
+    CHECK(cpu < 15'000'000);   // most of the 30 ms was slept, not spun
+    const std::uint64_t past = rt_now_ns();
+    CHECK(rt_sleep_until_prewarmed(past - 1000, 2000) >= past);  // already passed: returns at once
+    CHECK(rt_now_ns() - past < 1'000'000);
+    const std::uint64_t d2 = rt_now_ns() + 5'000'000;
+    CHECK(rt_sleep_until_prewarmed(d2, 0) >= d2);                // plain sleep
+    CHECK(rt_sleep_until_prewarmed(1000, 4'000'000) >= 1000);    // spin longer than the deadline value
 }
 
 AXON_TEST(prefault_view) {

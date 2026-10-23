@@ -190,6 +190,30 @@ measure the ramp on the target with `benchmarks/ros2_cpp/run_frame_clock_probe.s
 | 0 µs limit on its CPU | 210-212 µs | 215-221 µs |
 | no limit, wake 2 ms early and spin | 210-211 µs | 212-216 µs |
 
+`rt_sleep_until_prewarmed(deadline_ns, spin_us)` does that: it sleeps until `spin_us` before
+the deadline (on the `rt_now_ns()` clock), busy-waits the rest and returns `rt_now_ns()`. Through
+it, the same producer measured p50 212 µs and p90 220-221 µs with `spin_us = 2000` (2 runs).
+
+```cpp
+std::uint64_t next = rt_now_ns();
+for (;;) {
+    next += 33'333'333;                       // 30 Hz
+    rt_sleep_until_prewarmed(next, 2000);     // asleep until 2 ms before, then spinning
+    write_and_publish_frame();
+}
+```
+
+```python
+nxt = axon.rt_now_ns()
+while True:
+    nxt += 33_333_333
+    axon.rt_sleep_until_prewarmed(nxt, 2000)  # releases the GIL while it waits
+    write_and_publish_frame()
+```
+
+The spin is busy CPU time on that core every period. Combine it with pinning, and size `spin_us`
+from a measurement on the target; a CPU whose clock does not drop needs none.
+
 ```cpp
 RtSetupConfig cfg;
 cfg.set_cpu_affinity = true;

@@ -125,6 +125,8 @@ def main() -> int:
     check_cpu_latency_hold()
     # Basic smoke of the module surface before the fork.
     assert axon.rt_now_ns() > 0
+    deadline = axon.rt_now_ns() + 5_000_000
+    assert axon.rt_sleep_until_prewarmed(deadline, 1000) >= deadline
     pool = axon.TensorPool.create(n_buffers=4, buffer_size=4096)
     assert pool.generation() == 1
     assert pool.buffer_count() == 4

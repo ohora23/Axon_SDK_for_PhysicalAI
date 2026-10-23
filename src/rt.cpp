@@ -256,4 +256,22 @@ std::uint64_t rt_now_ns() noexcept {
            static_cast<std::uint64_t>(ts.tv_nsec);
 }
 
+std::uint64_t rt_sleep_until_prewarmed(std::uint64_t deadline_ns, std::uint32_t spin_us) noexcept {
+    const std::uint64_t spin_ns = static_cast<std::uint64_t>(spin_us) * 1000;
+    std::uint64_t now = rt_now_ns();
+    // clock_nanosleep has no CLOCK_MONOTONIC_RAW: sleep a relative interval, re-measured after
+    // each interruption. The spin below ends on the RAW deadline, provided the sleep ended before it.
+    while (deadline_ns > spin_ns && now < deadline_ns - spin_ns) {
+        const std::uint64_t rem = deadline_ns - spin_ns - now;
+        struct timespec ts;
+        ts.tv_sec = static_cast<time_t>(rem / 1000000000ULL);
+        ts.tv_nsec = static_cast<long>(rem % 1000000000ULL);
+        clock_nanosleep(CLOCK_MONOTONIC, 0, &ts, nullptr);
+        now = rt_now_ns();
+    }
+    // A bare loop on purpose: the point is to keep the core busy, and this is what was measured.
+    while (now < deadline_ns) now = rt_now_ns();
+    return now;
+}
+
 }  // namespace axon

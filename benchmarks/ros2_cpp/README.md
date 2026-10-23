@@ -470,7 +470,7 @@ ranged from 2 to about 78,000 (around 30,000 in one run, around 30 in the other,
 kept waking that core in the first), and do not separate fast from slow frames within a run. What
 did predict the clock on this machine was how long the core had been busy before the write:
 after 2 ms or more, every frame ran at full clock. Spinning 2 ms ahead
-of each frame (`BENCH_PREWAKE_US=2000`) matches polling idle with no PM QoS at all, for 2 ms of
+of each frame (`BENCH_PREWAKE_US=2000`, through `axon::rt_sleep_until_prewarmed`) matches polling idle with no PM QoS at all, for 2 ms of
 a core per 33 ms frame instead of a core that never halts. Spinning for less than the write
 itself (250 µs) does almost nothing. This is one machine and one cpufreq setup; another CPU or
 governor will have its own ramp.

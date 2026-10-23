@@ -388,8 +388,32 @@ A producer that wakes on an idle core runs its write at about half the clock. Un
 scheduler presumably sometimes put it on a core that was already busy, which would explain why
 runs varied; the CPU it ran on was not logged. The clock explains the 2× split, not all of the
 spread. At the same 5.1-5.2 GHz, the second probe session ran up to ~35 % slower than the first
-(250-302 vs 219-270 µs), and that residual is unexplained. The probe uses 150 frames, the ring
-runs 300. The size
+(250-302 vs 219-270 µs).
+
+**That residual tracks how much of the payload the producer refills from DRAM**
+([`run_spread_probe.sh`](run_spread_probe.sh), `results/spread_probe.jsonl`, `results/spread_dose.jsonl`).
+At 1 buffer, the 16 MiB source and destination (32 MiB) fit in the 96 MB L3, but at 30 Hz they sit
+idle for 33 ms between frames, and whatever else runs on the machine can evict them. Measured on a
+quiet machine right after a reboot, producer pinned to CPU 6 with `CpuLatencyHold` 1 µs, consumer
+on CPU 7, conditions interleaved per round:
+
+| condition | p50 µs | producer cycles / frame | DRAM fills / frame |
+|---|---|---|---|
+| 300 frames, nothing else running (15 of 16 runs) | 211-217 | 1.13-1.22M | 76-5,572 |
+| 150 frames (6 runs) | 211-218 | 1.18-1.27M | 198-6,452 |
+| + another process copying 16 MiB every 33 ms (2) | 295-301 | 1.43-1.44M | 12-15k |
+| + the same with 32 MiB (2) | 432-435 | 2.0-2.1M | 55-61k |
+| + the same with 48 MiB (2) | 515-528 | 2.3M | 83-86k |
+| + 96 MiB copied every 5 ms (6) | 754-782 | 3.9-4.3M | 258-308k |
+
+The frame count does not matter. Across all 38 runs, p50 follows DRAM fills per frame (r = 0.98;
+below 100k fills, about 209 µs + 3.8 µs per 1,000 fills, r = 0.99). One baseline run, with no
+thrasher, came out at 332 µs with 34k fills: something else on the machine did it. A cache
+neighbour of a few tens of MiB, such as another session's workload or a browser, is enough to
+produce the earlier sessions' 250-300 µs. Those sessions did not log DRAM fills, so this is the
+mechanism they are consistent with, not a measurement of them. For a host producer at a low
+rate, the payload's cache residency is part of the latency, and a shared machine moves it. The
+probe uses 150 frames, the ring runs 300. The size
 table above was measured unpinned with default C-states, so its 16 and 64 MiB host cells carry
 this noise. The 16 MiB ranking holds in the pinned run: axon (4 buffers) 373 µs against
 iceoryx2's 219. For stable low-rate numbers, pin the producer and hold PM QoS 0, as an RT

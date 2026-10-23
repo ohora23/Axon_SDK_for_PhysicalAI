@@ -27,3 +27,5 @@ results/*
 !results/ring_perf_second_rep.jsonl
 !results/src_offset_probe.txt
 !results/cpu_latency_hold_probe.txt
+!results/spread_probe.jsonl
+!results/spread_dose.jsonl

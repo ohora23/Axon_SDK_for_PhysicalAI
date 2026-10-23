@@ -350,18 +350,20 @@ is pinned to CPU 6 and the consumer to CPU 7, two different physical cores. PM Q
   from DRAM, against 0.5-1.3 % with 1-2. Cycles and latency follow: 1.6-1.7× slower.
   - dTLB misses are the same in every row. ~8.3 K per 16 MiB frame matches 4 KiB pages for
     the source and the destination (inferred, not checked directly).
-  - Page faults are 0 per frame.
+  - Page faults are about 0 per frame (0.1 for axon, 0.0 for iceoryx2).
   - So the cost is consistent with cache capacity, not paging or the TLB.
   - axon with one buffer matches iceoryx2, whose working set is presumably a few samples (not
     measured). With 2 buffers, axon costs about 5 % more than with 1.
 - **At 64 MiB, the payload no longer fits whatever the depth** (25-42 % from DRAM). A 1-buffer
   ring is 2.5 % faster than iceoryx2.
-- **An earlier version of this section reported a "7 % unexplained" gap at 64 MiB.** That
-  claim was wrong: it was clock noise, described next. That first run (`ring_perf_first_rep.jsonl`)
-  was neither pinned nor under PM QoS. Two later unpinned runs had axon and iceoryx2 within 3 %
-  at 64 MiB: 2100 vs 2099 µs (`ring_perf_second_rep.jsonl`) and 2067 vs 2120 µs
-  (`ring_perf_unpinned_rep.jsonl`).
-- **4 KiB aliasing between the source and destination is not a factor.** axon's destination is
+- **An earlier version of this section reported a "7 % unexplained" gap at 64 MiB.** It did
+  not reproduce in three later runs. Two unpinned runs had axon and iceoryx2 within 3 %: 2100 vs
+  2099 µs (`ring_perf_second_rep.jsonl`) and 2067 vs 2120 µs (`ring_perf_unpinned_rep.jsonl`).
+  The pinned run above puts axon 2.5 % ahead. In that first run (`ring_perf_first_rep.jsonl`)
+  axon also spent about 7 % more cycles per frame, so it was not the clock effect described
+  below. It was variation between sessions, and its cause was not established.
+- **4 KiB aliasing between the source and destination made no measurable difference at 64 MiB**
+  (within about 5 % noise, 1 buffer, unpinned). axon's destination is
   page-aligned and 16 B from the source's page offset, iceoryx2's is 168 B. Moving the source
   (`BENCH_SRC_OFFSET`) to any of four offsets left the 64 MiB p50 within run-to-run noise, for
   both (`results/src_offset_probe.txt`).
@@ -373,7 +375,7 @@ is pinned to CPU 6 and the consumer to CPU 7, two different physical cores. PM Q
 `results/clock_probe.txt`, which holds the second of the two sessions below). At 30 Hz, the producer's core idles between frames. Unpinned, the
 same cell came out at 55 or 105 µs (4 MiB) and 212 or 416 µs (16 MiB) from run to run. In those
 runs, cycles per frame did not change, context switches were 1 per frame (the sleep), and
-migrations 0 (`ring_perf_unpinned_rep.jsonl`, `ring_perf_pinned_noqos_rep.jsonl`). The clock
+migrations about 0 (`ring_perf_unpinned_rep.jsonl`, `ring_perf_pinned_noqos_rep.jsonl`). The clock
 did change. Average clock (cycles / task-clock) of the 16 MiB, 1-buffer producer, two sessions:
 
 | producer placement | p50 µs | clock |
@@ -383,7 +385,11 @@ did change. Average clock (cycles / task-clock) of the 16 MiB, 1-buffer producer
 | on its own core, PM QoS 0 | 219-299 | 5.2 GHz |
 
 A producer that wakes on an idle core runs its write at about half the clock. Unpinned, the
-scheduler sometimes put it on a core that was already busy, which is why runs varied. The size
+scheduler presumably sometimes put it on a core that was already busy, which would explain why
+runs varied; the CPU it ran on was not logged. The clock explains the 2× split, not all of the
+spread. At the same 5.1-5.2 GHz, the second probe session ran up to ~30 % slower than the first
+(250-302 vs 219-270 µs), and that residual is unexplained. The probe uses 150 frames, the ring
+runs 300. The size
 table above was measured unpinned with default C-states, so its 16 and 64 MiB host cells carry
 this noise. The 16 MiB ranking holds in the pinned run: axon (4 buffers) 373 µs against
 iceoryx2's 219. For stable low-rate numbers, pin the producer and hold PM QoS 0, as an RT

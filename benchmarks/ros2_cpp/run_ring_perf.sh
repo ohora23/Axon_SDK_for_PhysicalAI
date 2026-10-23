@@ -23,6 +23,7 @@ OUT="${RING_OUT:-$HERE/results/ring_perf_rep.jsonl}"
 if [ "$PMQOS" = 1 ]; then
   python3 -c "import struct,time; f=open('/dev/cpu_dma_latency','wb',buffering=0); f.write(struct.pack('i',0)); time.sleep(1e9)" & QP=$!
   trap 'kill $QP 2>/dev/null' EXIT
+  sleep 0.3; kill -0 $QP 2>/dev/null || { echo "PM QoS holder failed (is /dev/cpu_dma_latency writable?)" >&2; exit 1; }
 fi
 PUB_PIN=(); SUB_PIN=()
 if [ -n "$PIN" ]; then PUB_PIN=(taskset -c "${PIN%%,*}"); SUB_PIN=(taskset -c "${PIN#*,}"); fi

@@ -27,6 +27,8 @@ for r in 1 2; do
   one "$SIB" "producer on the consumer core's SMT sibling"
   one "$OWN_CPU" "producer on its own idle core"
   python3 -c "import struct,time; f=open('/dev/cpu_dma_latency','wb',buffering=0); f.write(struct.pack('i',0)); time.sleep(30)" & q=$!; sleep 0.5
+  kill -0 $q 2>/dev/null || { echo "PM QoS holder failed (is /dev/cpu_dma_latency writable?)" >&2; exit 1; }
+  trap 'kill $q 2>/dev/null' EXIT
   one "$OWN_CPU" "producer on its own core, PM QoS 0"
   kill $q
 done

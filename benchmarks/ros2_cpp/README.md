@@ -319,47 +319,85 @@ one 8640 B run lost one frame at 1 kHz. The serialized Fast DDS cell (`UInt8Mult
   host advantage over a plain shared-memory transport is therefore not latency. It is what sits
   around the transport: dma-buf/V4L2 and CUDA buffer pools, the GPU handoff, and RT
   latest-value semantics.
-- **From 16 MiB, axon is the slowest of the zero-copy paths on the host** (16 MiB: axon 474,
-  iceoryx2 238, Fast DDS loaned 304 µs). The time grows with axon's ring depth, and the
-  counters below show why: at 16 MiB the producer's write runs out of cache. A shallower ring
+- **From 16 MiB, axon (4 buffers) is the slowest of the zero-copy paths on the host.** In this
+  table, 16 MiB gives axon 474, iceoryx2 238 and Fast DDS loaned 304 µs; the clock note below
+  explains part of the spread. With the clock held: axon 373 against iceoryx2's 219. The time
+  grows with axon's ring depth, and the counters below show why: at 16 MiB the producer's write
+  runs out of cache. A shallower ring
   makes a torn frame more likely for a slow reader, though
   (see [docs/usage.md](../../docs/usage.md) on ring sizing).
 
-**Why ring depth costs at 16 MiB** ([`run_ring_perf.sh`](run_ring_perf.sh)). Hardware counters
-on the producer process, which writes the whole payload, and that write is most of the
-latency. 30 Hz, 300 frames, counted from 1.5 s in (after setup), 3 runs, median per frame. A
-payload is 262 K cache lines at 16 MiB and 1 M at 64 MiB:
+**Why ring depth costs at 16 MiB** ([`run_ring_perf.sh`](run_ring_perf.sh)). The counters are taken
+on the producer process. It writes the whole payload, and that write is most of the latency.
+30 Hz, 300 frames, 3 runs, median per frame, counted from 1.5 s in (after setup). The producer
+is pinned to CPU 6 and the consumer to CPU 7, two different physical cores. PM QoS 0 is held
+(no deep C-states); the clock section below explains why. A payload is 65 K cache lines at
+4 MiB, 262 K at 16 MiB and 1 M at 64 MiB:
 
-| payload | producer | p50 µs | lines filled from DRAM | from L3 | L1 dTLB misses | cycles |
+| payload | producer | p50 µs (3 runs) | lines filled from DRAM | from L3 | L1 dTLB misses | cycles |
 |---|---|---|---|---|---|---|
-| 4 MiB | axon, 1 / 2 / 4 buffers | 59 / 59 / 60 | 0-1 K | 8-15 K | 2.2 K | 0.31-0.36 M |
-| 4 MiB | iceoryx2 | 61 | 0 K | 13 K | 2.2 K | 0.33 M |
-| 16 MiB | axon, 1 buffer | 227 | 1 K (0 %) | 22 K | 8.5 K | 1.18 M |
-| 16 MiB | axon, 2 buffers | 250 | 9 K (3 %) | 15 K | 8.5 K | 1.34 M |
-| 16 MiB | axon, 4 buffers | **384** | **55 K (21 %)** | 14 K | 8.7 K | 1.98 M |
-| 16 MiB | iceoryx2 | 237 | 1 K (0 %) | 18 K | 8.4 K | 1.19 M |
-| 64 MiB | axon, 1 / 2 / 4 buffers | 2312 / 3003 / 3219 | 312 / 613 / 595 K | 219 / 176 / 362 K | 30-33 K | 12.3-17.0 M |
-| 64 MiB | iceoryx2 | 2156 | 416 K | 35 K | 33.5 K | 11.4 M |
+| 4 MiB | axon, 1 / 2 / 4 buffers | 57 / 57 / 58 | 0.1-0.2 K | 9-13 K | 2.1-2.2 K | 0.33-0.36 M |
+| 4 MiB | iceoryx2 | 62 | 0.0 K | 15 K | 2.2 K | 0.35 M |
+| 16 MiB | axon, 1 buffer | 220 (218-223) | 1.2 K (0.5 %) | 12 K | 8.3 K | 1.24 M |
+| 16 MiB | axon, 2 buffers | 230 (226-231) | 3.5 K (1.3 %) | 8 K | 8.3 K | 1.31 M |
+| 16 MiB | axon, 4 buffers | **373** (355-374) | **38.7 K (14.8 %)** | 9 K | 8.3 K | 2.12 M |
+| 16 MiB | iceoryx2 | 219 (218-220) | 0.4 K (0.1 %) | 9 K | 8.3 K | 1.23 M |
+| 64 MiB | axon, 1 buffer | **2155** (2153-2177) | 276 K (26 %) | 18 K | 32.9 K | 11.5 M |
+| 64 MiB | axon, 2 / 4 buffers | 3605 / 3319 | 348 / 441 K (33 / 42 %) | 256 / 205 K | 30-32 K | 18.0-18.6 M |
+| 64 MiB | iceoryx2 | **2210** (2182-2281) | 261 K (25 %) | 54 K | 32.9 K | 11.8 M |
 
-- **At 16 MiB, ring depth costs DRAM traffic.** With 4 buffers, 21 % of each frame's lines come
-  from DRAM, against almost none with 1-2. Cycles and latency follow. dTLB misses are the same in
-  every row, and ~8.5 K per 16 MiB frame matches 4 KiB pages for the source and the destination
-  (inferred, not checked directly). Page faults are 0 per frame. So the cost is consistent with
-  cache capacity, not paging or the TLB. iceoryx2 behaves like axon with one buffer; its working
-  set is presumably a few samples, which was not measured. With 2 buffers, axon costs about 10 %
-  more than with 1.
-- **At 64 MiB, the payload no longer fits in any case** (30-58 % from DRAM). A 1-buffer axon ring
-  is still 7 % slower than iceoryx2, which fills even more lines from DRAM. axon's L3 fills vary
-  widely between runs there (40-235 K, against a steady 35 K for iceoryx2). That gap is not
-  explained by these counters.
-- These numbers come from a different session than the size table, which had 474 µs for axon at
-  16 MiB with 4 buffers. Single-stream cells at this size vary by tens of percent between
-  sessions on this PC.
+- **At 16 MiB, ring depth costs DRAM traffic.** With 4 buffers, 15 % of each frame's lines come
+  from DRAM, against 0.5-1.3 % with 1-2. Cycles and latency follow: 1.6-1.7× slower.
+  - dTLB misses are the same in every row. ~8.3 K per 16 MiB frame matches 4 KiB pages for
+    the source and the destination (inferred, not checked directly).
+  - Page faults are about 0 per frame (0.1 for axon, 0.0 for iceoryx2).
+  - So the cost is consistent with cache capacity, not paging or the TLB.
+  - axon with one buffer matches iceoryx2, whose working set is presumably a few samples (not
+    measured). With 2 buffers, axon costs about 5 % more than with 1.
+- **At 64 MiB, the payload no longer fits whatever the depth** (25-42 % from DRAM). A 1-buffer
+  ring is 2.5 % faster than iceoryx2.
+- **An earlier version of this section reported a "7 % unexplained" gap at 64 MiB.** It did
+  not reproduce in three later runs. Two unpinned runs had axon and iceoryx2 within 3 %: 2100 vs
+  2099 µs (`ring_perf_second_rep.jsonl`) and 2067 vs 2120 µs (`ring_perf_unpinned_rep.jsonl`).
+  The pinned run above puts axon 2.5 % ahead. In that first run (`ring_perf_first_rep.jsonl`)
+  axon also spent about 7 % more cycles per frame, so it was not the clock effect described
+  below. It was variation between sessions, and its cause was not established.
+- **4 KiB aliasing between the source and destination made no measurable difference at 64 MiB**
+  (within about 5 % noise, 1 buffer, unpinned). axon's destination is
+  page-aligned and 16 B from the source's page offset, iceoryx2's is 168 B. Moving the source
+  (`BENCH_SRC_OFFSET`) to any of four offsets left the 64 MiB p50 within run-to-run noise, for
+  both (`results/src_offset_probe.txt`).
 - In practice, a host payload of several MiB or more wants the shallowest ring its readers
-  allow. 2 buffers is the cheap middle ground. The benchmark keeps 4 for every size, to keep
+  allow; 2 buffers is the cheap middle ground. The benchmark keeps 4 for every size, to keep
   one rule.
 
-Raw data: `results/ring_perf_rep.jsonl` (needs `kernel.perf_event_paranoid` ≤ 1).
+**The producer's clock decides low-rate host numbers** ([`run_clock_probe.sh`](run_clock_probe.sh),
+`results/clock_probe.txt`, which holds the second of the two sessions below). At 30 Hz, the producer's core idles between frames. Unpinned, the
+same cell came out at 55 or 105 µs (4 MiB) and 212 or 416 µs (16 MiB) from run to run. In those
+runs, cycles per frame did not change, context switches were 1 per frame (the sleep), and
+migrations about 0 (`ring_perf_unpinned_rep.jsonl`, `ring_perf_pinned_noqos_rep.jsonl`). The clock
+did change. Average clock (cycles / task-clock) of the 16 MiB, 1-buffer producer, two sessions:
+
+| producer placement | p50 µs | clock |
+|---|---|---|
+| on the SMT sibling of the busy-polling consumer's core | 222-302 | 5.1 GHz |
+| on its own idle core | 416-428 | **2.8-3.3 GHz** |
+| on its own core, PM QoS 0 | 219-299 | 5.2 GHz |
+
+A producer that wakes on an idle core runs its write at about half the clock. Unpinned, the
+scheduler presumably sometimes put it on a core that was already busy, which would explain why
+runs varied; the CPU it ran on was not logged. The clock explains the 2× split, not all of the
+spread. At the same 5.1-5.2 GHz, the second probe session ran up to ~35 % slower than the first
+(250-302 vs 219-270 µs), and that residual is unexplained. The probe uses 150 frames, the ring
+runs 300. The size
+table above was measured unpinned with default C-states, so its 16 and 64 MiB host cells carry
+this noise. The 16 MiB ranking holds in the pinned run: axon (4 buffers) 373 µs against
+iceoryx2's 219. For stable low-rate numbers, pin the producer and hold PM QoS 0, as an RT
+robot computer would.
+
+Raw data: `results/ring_perf_rep.jsonl` (pinned, PM QoS 0; `PIN=6,7 PMQOS=1 run_ring_perf.sh`),
+`results/ring_perf_unpinned_rep.jsonl`, `results/ring_perf_pinned_noqos_rep.jsonl`,
+`results/ring_perf_second_rep.jsonl`, `results/ring_perf_first_rep.jsonl`. All need `kernel.perf_event_paranoid` ≤ 1.
 - **zenoh's shared memory halves its latency** (242 → 125 µs at 1 MiB), but without loans it
   stays a serialized path.
 

@@ -4,7 +4,12 @@
 # AXON_BENCH_NBUF 1/2/4 and for iceoryx2, at 4, 16 and 64 MiB, 30 Hz. Needs
 # `sudo sysctl kernel.perf_event_paranoid=1` and iox2_bench built. Counting starts 1.5 s in,
 # after setup (pool creation, first touch of every buffer, discovery).
-#   run_ring_perf.sh [frames] [reps]  ->  results/ring_perf_rep.jsonl
+#   run_ring_perf.sh [frames] [reps]  ->  results/ring_perf_rep.jsonl (RING_OUT overrides)
+# PIN=<pub cpu>,<sub cpu> pins the producer and the consumer (taskset) to those CPUs; pick two
+# different physical cores (see /sys/devices/system/cpu/cpu*/topology/thread_siblings_list).
+# PMQOS=1 holds /dev/cpu_dma_latency at 0 (no deep C-states) for the whole run. Without it, a 30 Hz
+# producer on an otherwise idle core wakes into a ~2.8 GHz clock instead of ~5.2 GHz, and its
+# latency doubles; which core it lands on then decides the number.
 HERE="$(cd "$(dirname "$0")" && pwd)"
 FRAMES="${1:-300}"; REPS="${2:-3}"
 PERF="${PERF:-/usr/lib/linux-tools/7.0.0-38-generic/perf}"
@@ -13,17 +18,24 @@ source /opt/ros/jazzy/setup.bash; source "$HERE/install/setup.bash"
 export ROS_DOMAIN_ID=77
 B="$HERE/install/axon_bench/lib/axon_bench"
 T="${GATED_TMP:-$HOME/.cache/axon-gated}"; mkdir -p "$T"
-EV=cycles,instructions,ls_any_fills_from_sys.local_l2,ls_any_fills_from_sys.local_ccx,ls_any_fills_from_sys.dram_io_all,ls_l1_d_tlb_miss.all,ls_l1_d_tlb_miss.all_l2_miss,page-faults
-OUT="$HERE/results/ring_perf_rep.jsonl"
-echo "{\"meta\":\"ring_perf\",\"date\":\"$(date -Is)\",\"cpus_online\":\"$(cat /sys/devices/system/cpu/online)\",\"events\":\"$EV\",\"delay_ms\":1500,\"rate_hz\":30,\"frames\":$FRAMES}" > "$OUT"
+EV=task-clock,context-switches,cpu-migrations,cycles,instructions,ls_any_fills_from_sys.local_l2,ls_any_fills_from_sys.local_ccx,ls_any_fills_from_sys.dram_io_all,ls_l1_d_tlb_miss.all,page-faults  # 6 hardware events: no multiplexing on Zen 5
+OUT="${RING_OUT:-$HERE/results/ring_perf_rep.jsonl}"
+if [ "$PMQOS" = 1 ]; then
+  python3 -c "import struct,time; f=open('/dev/cpu_dma_latency','wb',buffering=0); f.write(struct.pack('i',0)); time.sleep(1e9)" & QP=$!
+  trap 'kill $QP 2>/dev/null' EXIT
+  sleep 0.3; kill -0 $QP 2>/dev/null || { echo "PM QoS holder failed (is /dev/cpu_dma_latency writable?)" >&2; exit 1; }
+fi
+PUB_PIN=(); SUB_PIN=()
+if [ -n "$PIN" ]; then PUB_PIN=(taskset -c "${PIN%%,*}"); SUB_PIN=(taskset -c "${PIN#*,}"); fi
+echo "{\"meta\":\"ring_perf\",\"pin\":\"${PIN:-none}\",\"pm_qos_us\":$([ "$PMQOS" = 1 ] && echo 0 || echo null),\"date\":\"$(date -Is)\",\"cpus_online\":\"$(cat /sys/devices/system/cpu/online)\",\"events\":\"$EV\",\"delay_ms\":1500,\"rate_hz\":30,\"frames\":$FRAMES}" > "$OUT"
 
 one() {  # one <label> <nbuf> <bytes> <sub cmd...> -- <pub cmd...>
   local label=$1 nbuf=$2 bytes=$3 rep=$4; shift 4
   local sub=() pub=(); while [ "$1" != -- ]; do sub+=("$1"); shift; done; shift; pub=("$@")
-  AXON_BENCH_NBUF=$nbuf "${sub[@]}" > "$T/rp.sub" 2>/dev/null & local sp=$!
+  AXON_BENCH_NBUF=$nbuf "${SUB_PIN[@]}" "${sub[@]}" > "$T/rp.sub" 2>/dev/null & local sp=$!
   sleep 1
   local t0=$(date +%s%N)
-  AXON_BENCH_NBUF=$nbuf "$PERF" stat -x, --delay 1500 -e "$EV" -o "$T/rp.perf" "${pub[@]}" > "$T/rp.pub" 2>/dev/null
+  AXON_BENCH_NBUF=$nbuf "${PUB_PIN[@]}" "$PERF" stat -x, --delay 1500 -e "$EV" -o "$T/rp.perf" "${pub[@]}" > "$T/rp.pub" 2>/dev/null
   local el=$(( ($(date +%s%N) - t0) / 1000000 ))
   wait $sp
   python3 -I - "$label" "$nbuf" "$bytes" "$rep" "$T/rp.perf" "$T/rp.pub" "$T/rp.sub" "$el" >> "$OUT" <<'PY'
@@ -33,7 +45,7 @@ c = {}
 for line in open(perf):
     f = line.strip().split(",")
     if len(f) > 2 and f[0] and f[0][0].isdigit():
-        c[f[2]] = int(f[0])
+        c[f[2]] = float(f[0])  # task-clock is in msec, the rest are counts
 p = json.loads(next(l for l in open(pub) if l.startswith("{")))
 s = json.loads(next(l for l in open(sub) if l.startswith("{")))
 # Frames inside the counting window: process time minus the 1.5 s delay and, for iox2_bench, the

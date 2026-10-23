@@ -20,3 +20,9 @@ results/*
 !results/consumer_kernel_rep.jsonl
 !results/rmw_rep.jsonl
 !results/ring_perf_rep.jsonl
+!results/ring_perf_unpinned_rep.jsonl
+!results/ring_perf_pinned_noqos_rep.jsonl
+!results/ring_perf_first_rep.jsonl
+!results/clock_probe.txt
+!results/ring_perf_second_rep.jsonl
+!results/src_offset_probe.txt

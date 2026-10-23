@@ -14,6 +14,9 @@
 #include <unistd.h>
 #include <sys/resource.h>
 #include <sys/time.h>
+#include <sys/syscall.h>
+#include <sched.h>
+#include <linux/perf_event.h>
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/u_int8_multi_array.hpp>
@@ -510,6 +513,41 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
         check_cuda(cuMemcpyHtoD(d_src, srcp, bytes), "cuMemcpyHtoD src");
     }
 
+    // BENCH_FRAME_LOG=<path> (host only): per frame, the payload write's duration and the cycles it
+    // took on this thread (perf_event_open, needs kernel.perf_event_paranoid <= 1), written at exit.
+    const char* frame_log = gpu == 0 ? std::getenv("BENCH_FRAME_LOG") : nullptr;
+    int cyc_fd = -1;
+    if (frame_log) {
+        perf_event_attr pa{};
+        pa.type = PERF_TYPE_HARDWARE; pa.size = sizeof(pa); pa.config = PERF_COUNT_HW_CPU_CYCLES;
+        cyc_fd = (int)syscall(SYS_perf_event_open, &pa, 0, -1, -1, 0);
+        if (cyc_fd < 0) { std::perror("perf_event_open"); std::exit(2); }
+    }
+    auto read_cycles = [&] { std::uint64_t v = 0; if (::read(cyc_fd, &v, 8) != 8) v = 0; return v; };
+    std::vector<std::uint64_t> fl_ns, fl_cyc;
+    // ... and, after each publish, this CPU's cpuidle usage/time counters, so the log shows which
+    // idle states the sleep before each frame went through (diff consecutive lines).
+    std::vector<std::string> fl_idle;
+    auto read_idle = [] {
+        std::string out;
+        const int cpu = sched_getcpu();
+        for (int st = 0; st < 8; ++st) {
+            for (const char* k : {"usage", "time"}) {
+                char path[96];
+                std::snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%d/cpuidle/state%d/%s", cpu, st, k);
+                FILE* f = std::fopen(path, "r");
+                if (!f) return out;
+                unsigned long long v = 0;
+                if (std::fscanf(f, "%llu", &v) != 1) v = 0;
+                std::fclose(f);
+                out += " " + std::to_string(v);
+            }
+        }
+        return out;
+    };
+    // BENCH_PREWAKE_US=<us>: sleep until that long before each frame, then busy-wait to the frame time.
+    const std::uint64_t prewake_ns = std::getenv("BENCH_PREWAKE_US") ? std::strtoull(std::getenv("BENCH_PREWAKE_US"), nullptr, 10) * 1000 : 0;
+
     struct timeval tv0, tv1;
     gettimeofday(&tv0, nullptr);
     double cpu0 = cpu_seconds();
@@ -523,7 +561,9 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
             if (seq_i == 1 && std::getenv("BENCH_ADDR_LOG"))
                 std::fprintf(stderr, "addr src%%4096=%zu dst%%4096=%zu\n", (std::size_t)(uintptr_t)srcp % 4096,
                              (std::size_t)(uintptr_t)a.host_view % 4096);
+            const std::uint64_t c0 = frame_log ? read_cycles() : 0, w0 = axon::rt_now_ns();
             std::memcpy(a.host_view, srcp, bytes);
+            if (frame_log) { fl_ns.push_back(axon::rt_now_ns() - w0); fl_cyc.push_back(read_cycles() - c0); }
             std::memcpy(a.host_view, &t0, 8);
             std::memcpy((uint8_t*)a.host_view + 8, &seq, 8);
             std::memcpy((uint8_t*)a.host_view + bytes - 8, &seq, 8);
@@ -547,12 +587,27 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
         a.desc->sync_fence_kind = SyncFenceKind::None;
 
         pub->publish(std::move(a));
-        sleep_until(t0 + (std::uint64_t)(1e9 / rate_hz));
+        if (frame_log) fl_idle.push_back(read_idle());
+        const std::uint64_t next = t0 + (std::uint64_t)(1e9 / rate_hz);
+        if (prewake_ns && next > prewake_ns) {  // wake early and spin, so the core is busy when the frame starts
+            sleep_until(next - prewake_ns);
+            while (axon::rt_now_ns() < next) {}
+        } else {
+            sleep_until(next);
+        }
     }
 
     gettimeofday(&tv1, nullptr);
     double wall_s = (tv1.tv_sec - tv0.tv_sec) + (tv1.tv_usec - tv0.tv_usec) * 1e-6;
     double cpu1 = cpu_seconds();
+    if (frame_log) {
+        if (FILE* f = std::fopen(frame_log, "w")) {
+            for (std::size_t i = 0; i < fl_ns.size(); ++i)
+                std::fprintf(f, "%zu %llu %llu%s\n", i + 1, (unsigned long long)fl_ns[i], (unsigned long long)fl_cyc[i],
+                             i < fl_idle.size() ? fl_idle[i].c_str() : "");
+            std::fclose(f);
+        }
+    }
 
     const int nsubs = env_nsubs();
 
@@ -566,6 +621,9 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
 // ============ Axon consumer ============
 static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
     SubResult res;
+    // BENCH_SAMPLE_LOG=<path> (host only): "seq latency_us" per timed frame, written at exit.
+    const char* sample_log = gpu == 0 ? std::getenv("BENCH_SAMPLE_LOG") : nullptr;
+    std::vector<std::pair<std::uint64_t, double>> sl;
 
     if (gpu == 1) init_cuda_ctx();
 
@@ -613,6 +671,7 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
                         wall_first = axon::rt_now_ns();
                     }
                     if (seen > 20) latencies.push_back((now - t0) / 1000.0);
+                    if (seen > 20 && sample_log) sl.emplace_back(head_seq, (now - t0) / 1000.0);
                     last_seqno = head_seq;
                     cpu_last = cpu_seconds();  // the CPU window ends at the last frame taken
                     wall_last = axon::rt_now_ns();
@@ -677,6 +736,12 @@ static SubResult run_sub_axon(int bytes, int frames, int rate_hz, int gpu) {
         res.window_s = (wall_last - wall_first) / 1e9;
     }
     res.samples_us = std::move(latencies);
+    if (sample_log) {
+        if (FILE* f = std::fopen(sample_log, "w")) {
+            for (auto& [q, us] : sl) std::fprintf(f, "%llu %.1f\n", (unsigned long long)q, us);
+            std::fclose(f);
+        }
+    }
     print_sub_result("axon", bytes, gpu, frames, res);
     return res;
 }

@@ -439,6 +439,36 @@ producer's core alone keeps it, and the other cores keep their deep idle states.
 machine with 2 runs per row. The per-CPU rows come from the second session only, and the
 system-wide rows from both, so treat small differences between them as noise.
 
+**A 1 µs limit fixes the median, not the tail** ([`run_frame_clock_probe.sh`](run_frame_clock_probe.sh),
+`results/frame_clock.jsonl`). The averages above hide that each frame runs at one of two clocks.
+The probe logs, per frame, the consumer's latency and the producer's write time and cycles
+(`BENCH_SAMPLE_LOG`, `BENCH_FRAME_LOG`). Every write ran at 5.22 GHz or at exactly half, 2.61 GHz,
+and kept that clock to its end (210 or about 420 µs). Same setup as above, 2 runs of 280 timed
+frames each, settings interleaved:
+
+| setting | p50 µs | p90 µs | frames at half clock |
+|---|---|---|---|
+| no limit | 419-430 | 424-549 | 74-98 % |
+| 20 µs (C2) | 419 | 425 | 93-98 % |
+| **1 µs (C1)** | 212-213 | **419** | **26-30 %** |
+| 0 µs (polling) | 210-212 | 215-221 | 0 % |
+| no limit, wake 250 µs early and spin | 418 | 423-424 | 90-94 % |
+| ... 500 µs | 344-369 | 421-423 | 67-69 % |
+| ... 1 ms | 212-213 | 322-327 | 19 % |
+| **... 2 ms** | **210-211** | **212-216** | **0 %** |
+| ... 4 ms | 210 | 213 | 0 % |
+| 1 µs and 1 ms spin | 210-212 | 239-300 | 6-12 % |
+
+The clock is the frequency the CPU picks for a core that has been idle (`amd-pstate-epp`, active
+mode, EPP `performance`). It does not follow from the idle state alone: under the 1 µs limit
+every sleep went through C1, fast and slow frames alike, and the number of C1 entries per sleep
+(tens to tens of thousands, varying from run to run) does not separate them. What brings the
+clock back is the core being busy for about 1-2 ms before the write starts. Spinning 2 ms ahead
+of each frame (`BENCH_PREWAKE_US=2000`) matches polling idle with no PM QoS at all, for 2 ms of
+a core per 33 ms frame instead of a core that never halts. Spinning for less than the write
+itself (250 µs) does almost nothing. This is one machine and one cpufreq setup; another CPU or
+governor will have its own ramp.
+
 Raw data: `results/ring_perf_rep.jsonl` (pinned, PM QoS 0; `PIN=6,7 PMQOS=1 run_ring_perf.sh`),
 `results/ring_perf_unpinned_rep.jsonl`, `results/ring_perf_pinned_noqos_rep.jsonl`,
 `results/ring_perf_second_rep.jsonl`, `results/ring_perf_first_rep.jsonl`. All need `kernel.perf_event_paranoid` ≤ 1.

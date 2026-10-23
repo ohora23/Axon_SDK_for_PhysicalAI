@@ -170,8 +170,24 @@ decides low-rate host numbers"):
 | polling only (0 µs) | 234-260 µs | 5.2 GHz |
 
 `CpuLatencyHold` sets such a limit for as long as it lives. **1 µs on the producer's CPU** keeps
-most of the gain: idle cores halt instead of spinning, as they would with polling (0), and the
-other cores keep their deep idle states.
+most of the gain at the median: idle cores halt instead of spinning, as they would with polling
+(0), and the other cores keep their deep idle states.
+
+The averages hide a tail. Per frame, the write ran at either the full clock or exactly half of
+it, and under the 1 µs limit 26-30 % of frames still ran at half: p50 212 µs, but **p90 419 µs**.
+Only polling (0 µs) removed it. The CPU raises a core's clock after about 1-2 ms of being busy,
+so a producer that cares about its tail can instead wake early and spin: sleeping until 2 ms
+before each frame, then busy-waiting to the frame time, gave p50 210 µs and p90 212-216 µs with
+no limit at all, for about 6 % of a core at 30 Hz. Spinning less than the work itself does
+nothing (250 µs: p90 423 µs). The numbers are for one Ryzen 9800X3D with `amd-pstate-epp`;
+measure the ramp on the target with `benchmarks/ros2_cpp/run_frame_clock_probe.sh`.
+
+| producer setup | p50 | p90 |
+|---|---|---|
+| no limit | 419-430 µs | 424-549 µs |
+| 1 µs limit on its CPU | 212-213 µs | 419 µs |
+| 0 µs limit on its CPU | 210-212 µs | 215-221 µs |
+| no limit, wake 2 ms early and spin | 210-211 µs | 212-216 µs |
 
 ```cpp
 RtSetupConfig cfg;

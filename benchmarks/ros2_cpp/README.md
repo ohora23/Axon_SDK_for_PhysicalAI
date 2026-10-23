@@ -387,7 +387,7 @@ did change. Average clock (cycles / task-clock) of the 16 MiB, 1-buffer producer
 A producer that wakes on an idle core runs its write at about half the clock. Unpinned, the
 scheduler presumably sometimes put it on a core that was already busy, which would explain why
 runs varied; the CPU it ran on was not logged. The clock explains the 2× split, not all of the
-spread. At the same 5.1-5.2 GHz, the second probe session ran up to ~30 % slower than the first
+spread. At the same 5.1-5.2 GHz, the second probe session ran up to ~35 % slower than the first
 (250-302 vs 219-270 µs), and that residual is unexplained. The probe uses 150 frames, the ring
 runs 300. The size
 table above was measured unpinned with default C-states, so its 16 and 64 MiB host cells carry

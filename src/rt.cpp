@@ -90,6 +90,15 @@ std::optional<CpuLatencyHold> CpuLatencyHold::acquire(int max_latency_us, int cp
     }
     // sysfs reads "n/a" for a 0 µs limit and "0" for no limit, and takes the same strings back,
     // so the value read here restores exactly.
+    // An offline CPU keeps the attribute, but a limit on it does nothing: refuse. (cpu0 often has
+    // no "online" file because it cannot be offlined.)
+    std::string online;
+    const int saved = errno;
+    if (read_line(cpu_attr(cpu, "online"), online) && online == "0") {
+        errno = ENODEV;
+        return std::nullopt;
+    }
+    errno = saved;
     const std::string path = cpu_attr(cpu, "power/pm_qos_resume_latency_us");
     std::string prev;
     if (!read_line(path, prev)) return std::nullopt;
@@ -155,6 +164,7 @@ std::vector<int> rt_core_siblings(int cpu) {
             hi = std::strtol(h, &end, 10);
             if (end == h) return {};
         }
+        if (*end != '\0' || lo < 0 || hi < lo || hi - lo > 4096) return {};  // malformed
         for (long c = lo; c <= hi; ++c) out.push_back(static_cast<int>(c));
     }
     return out;

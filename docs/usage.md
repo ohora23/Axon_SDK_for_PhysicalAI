@@ -201,7 +201,8 @@ with axon.cpu_latency_hold(1, cpu=6):
   which grants a dedicated `axon-rt` group. Any member can keep every core awake, so keep that
   group to the RT users.
 - A hold belongs to the process that took it: a `fork()`ed child neither restores nor closes it.
-  Holds are not thread-safe. Call `rt_setup_memory_and_sched` once, from one thread.
+  Holds are not thread-safe: take and release them from one thread. A second
+  `rt_setup_memory_and_sched` call replaces the first call's hold.
 - In Python, prefer `with`. A hold left to the garbage collector may never be released at
   interpreter exit, which matters for the per-CPU path.
 - Pin the producer and an RT consumer to different physical cores. `rt_core_siblings(cpu)` lists

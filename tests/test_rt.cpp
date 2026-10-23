@@ -111,6 +111,19 @@ AXON_TEST(latency_hold_unknown_cpu_is_enoent) {
     CHECK(errno == ENOENT);
 }
 
+AXON_TEST(latency_hold_offline_cpu_is_enodev) {
+    for (int cpu = 1; cpu < 256; ++cpu) {
+        std::ifstream f("/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/online");
+        std::string v;
+        if (!f || !std::getline(f, v) || v != "0") continue;
+        errno = 0;
+        CHECK(!CpuLatencyHold::acquire(1, cpu));
+        CHECK(errno == ENODEV);
+        return;
+    }
+    std::printf("  (skipped: no offline CPU)\n");
+}
+
 AXON_TEST(latency_hold_forked_child_does_not_restore) {
     const std::string before = read_attr(0);
     auto h = CpuLatencyHold::acquire(7, 0);

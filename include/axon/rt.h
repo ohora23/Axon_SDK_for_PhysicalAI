@@ -53,7 +53,8 @@ struct RtSetupConfig {
 class CpuLatencyHold {
 public:
     // std::nullopt on failure, errno set: EACCES without the rights above, EINVAL for a negative
-    // latency or cpu < -1, ENOENT for an unknown or offline CPU, EIO for an unreadable value.
+    // latency or cpu < -1, ENOENT for an unknown CPU, ENODEV for an offline one (a limit on it would
+    // do nothing), EIO for an unreadable value.
     static std::optional<CpuLatencyHold> acquire(int max_latency_us = 0, int cpu = -1);
 
     CpuLatencyHold(CpuLatencyHold&& o) noexcept;

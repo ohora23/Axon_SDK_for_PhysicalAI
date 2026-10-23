@@ -395,6 +395,22 @@ this noise. The 16 MiB ranking holds in the pinned run: axon (4 buffers) 373 µs
 iceoryx2's 219. For stable low-rate numbers, pin the producer and hold PM QoS 0, as an RT
 robot computer would.
 
+The SDK now provides this as `axon::CpuLatencyHold` (`RtSetupConfig::cpu_latency_us`,
+Python `axon.cpu_latency_hold`; see [docs/usage.md](../../docs/usage.md)). bench's producer
+takes it as `BENCH_CPU_LATENCY_US` / `BENCH_CPU_LATENCY_CPU`. Through it, with the producer
+pinned to CPU 6 (`results/cpu_latency_hold_probe.txt`, 2 runs each):
+
+| limit | p50 | clock |
+|---|---|---|
+| none | 397-424 µs | 3.1-3.5 GHz |
+| 20 µs (C2 allowed), system-wide | 418-428 µs | 3.0-3.6 GHz |
+| **1 µs (C1), CPU 6 only** | **241-242 µs** | **4.9-5.0 GHz** |
+| 1 µs, system-wide | 254-271 µs | 4.6-4.9 GHz |
+| 0 µs (polling), CPU 6 only / system-wide | 234-247 / 235-260 µs | 5.2 GHz |
+
+C2 (18 µs exit latency) is already deep enough to cost the clock. A 1 µs limit on the
+producer's core alone keeps it, and the other cores keep their deep idle states.
+
 Raw data: `results/ring_perf_rep.jsonl` (pinned, PM QoS 0; `PIN=6,7 PMQOS=1 run_ring_perf.sh`),
 `results/ring_perf_unpinned_rep.jsonl`, `results/ring_perf_pinned_noqos_rep.jsonl`,
 `results/ring_perf_second_rep.jsonl`, `results/ring_perf_first_rep.jsonl`. All need `kernel.perf_event_paranoid` ≤ 1.

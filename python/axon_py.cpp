@@ -352,4 +352,34 @@ PYBIND11_MODULE(axon, m) {
 
     // ---- RT helpers ----
     m.def("rt_now_ns", &rt_now_ns, "CLOCK_MONOTONIC_RAW nanoseconds (RT-safe).");
+
+    struct PyLatencyHold {
+        std::optional<CpuLatencyHold> hold;
+    };
+    py::class_<PyLatencyHold>(m, "CpuLatencyHold",
+                              "Wake-up latency limit; released by release(), on leaving a `with` "
+                              "block, or when garbage-collected. See axon::CpuLatencyHold.")
+        .def_property_readonly("cpu", [](const PyLatencyHold& s) { return s.hold ? s.hold->cpu() : -1; })
+        .def_property_readonly("max_latency_us",
+                               [](const PyLatencyHold& s) { return s.hold ? s.hold->max_latency_us() : -1; })
+        .def_property_readonly("active", [](const PyLatencyHold& s) { return s.hold.has_value(); })
+        .def("release", [](PyLatencyHold& s) { s.hold.reset(); })
+        .def("__enter__", [](PyLatencyHold& s) -> PyLatencyHold& { return s; },
+             py::return_value_policy::reference)
+        .def("__exit__", [](PyLatencyHold& s, py::object, py::object, py::object) { s.hold.reset(); });
+    m.def(
+        "cpu_latency_hold",
+        [](int max_latency_us, int cpu) {
+            auto h = CpuLatencyHold::acquire(max_latency_us, cpu);
+            if (!h) {
+                PyErr_SetFromErrno(PyExc_OSError);  // PermissionError for EACCES
+                throw py::error_already_set();
+            }
+            return PyLatencyHold{std::move(h)};
+        },
+        py::arg("max_latency_us") = 0, py::arg("cpu") = -1,
+        "Keep CPUs out of deep idle states (cpu=-1: system-wide via /dev/cpu_dma_latency; "
+        "cpu>=0: that CPU via sysfs). Use as `with axon.cpu_latency_hold(1, cpu=6): ...`.");
+    m.def("rt_core_siblings", &rt_core_siblings, py::arg("cpu"),
+          "Logical CPUs sharing cpu's physical core (SMT siblings, cpu included).");
 }

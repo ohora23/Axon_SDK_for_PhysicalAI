@@ -8,6 +8,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace axon {
 
@@ -19,7 +22,56 @@ struct RtSetupConfig {
     bool   set_cpu_affinity    = false;       // When true, use cpu_id below
     int    cpu_id              = -1;
     bool   disable_malloc_trim = true;        // Disable glibc malloc trim (M_TRIM_THRESHOLD=-1)
+    // >= 0: also hold a CPU wake-up latency limit (CpuLatencyHold) for the rest of the process,
+    // on cpu_id when set_cpu_affinity is set, otherwise system-wide. -1: leave C-states alone.
+    int    cpu_latency_us      = -1;
 };
+
+// Keeps CPUs out of deep idle states while it lives. A producer that sleeps between frames
+// otherwise wakes on a core coming out of a deep C-state, at a lower clock: measured on a
+// Ryzen 9800X3D, a 30 Hz producer wrote 16 MiB at 2.8-3.3 GHz instead of 5.2 GHz and its
+// latency doubled (benchmarks/ros2_cpp, "The producer's clock decides low-rate host numbers").
+//
+//   cpu = -1  the whole system, through /dev/cpu_dma_latency. The kernel drops the request
+//             when the fd closes, so it also ends if the process dies. Needs root, or the
+//             device's group (plugdev on Ubuntu).
+//   cpu >= 0  that CPU only, through /sys/devices/system/cpu/cpuN/power/pm_qos_resume_latency_us.
+//             Cheaper on power for a pinned producer. Needs root or the udev rule in
+//             tools/udev/. The old value is restored when the hold is destroyed; a process
+//             that dies without unwinding leaves the limit set (sysfs is not fd-scoped).
+//
+// max_latency_us is the deepest idle state's exit latency allowed. 0 permits only polling idle:
+// the core spins, at the most power. 1 permits the shallowest halt state (C1), and on that CPU
+// it kept 4.7-4.8 GHz against 5.2 GHz for 0 and 3.0-3.6 GHz for 20 (C2). So 1 is the usual
+// choice. See /sys/devices/system/cpu/cpu0/cpuidle/state*/{name,latency} for a machine.
+class CpuLatencyHold {
+public:
+    // std::nullopt on failure, errno set (EACCES without the rights above, EINVAL for a bad
+    // cpu or negative latency, ENOENT when the CPU has no such attribute).
+    static std::optional<CpuLatencyHold> acquire(int max_latency_us = 0, int cpu = -1);
+
+    CpuLatencyHold(CpuLatencyHold&& o) noexcept;
+    CpuLatencyHold& operator=(CpuLatencyHold&& o) noexcept;
+    CpuLatencyHold(const CpuLatencyHold&) = delete;
+    CpuLatencyHold& operator=(const CpuLatencyHold&) = delete;
+    ~CpuLatencyHold();
+
+    int cpu() const noexcept { return cpu_; }
+    int max_latency_us() const noexcept { return us_; }
+
+private:
+    CpuLatencyHold(int fd, int cpu, int us, std::string restore) noexcept;
+    void release() noexcept;
+    int fd_ = -1;          // /dev/cpu_dma_latency (cpu == -1)
+    int cpu_ = -1;
+    int us_ = 0;
+    std::string restore_;  // previous sysfs value (cpu >= 0)
+};
+
+// The logical CPUs that share cpu's physical core (its SMT siblings, cpu included), from
+// sysfs. Use it to put a producer and an RT consumer on different physical cores. Empty when
+// the CPU is offline or unknown.
+std::vector<int> rt_core_siblings(int cpu);
 
 // Initialize the RT process. On failure returns a negative value with errno
 // set; the caller decides whether to log/exit.

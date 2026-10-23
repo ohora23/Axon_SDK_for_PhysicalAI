@@ -1,0 +1,7 @@
+# Lets group plugdev set per-CPU wake-up latency limits, the sysfs files axon::CpuLatencyHold
+# (cpu >= 0) writes: /sys/devices/system/cpu/cpuN/power/pm_qos_resume_latency_us.
+# plugdev already owns /dev/cpu_dma_latency (the system-wide limit) on Ubuntu.
+#
+#   sudo cp tools/udev/99-axon-cpu-latency.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=cpu --action=add
+SUBSYSTEM=="cpu", ACTION=="add", RUN+="/bin/chgrp plugdev /sys%p/power/pm_qos_resume_latency_us", RUN+="/bin/chmod g+w /sys%p/power/pm_qos_resume_latency_us"

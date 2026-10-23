@@ -6,6 +6,7 @@
 #include <cstring>
 #include <ctime>
 #include <chrono>
+#include <optional>
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -484,6 +485,18 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
         if (n > 0) accepted += n;
     }
     if (nsubs_wait > 1) std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // BENCH_CPU_LATENCY_US=<us> holds axon::CpuLatencyHold for the run, on BENCH_CPU_LATENCY_CPU
+    // (default -1 = system-wide): the API form of run_ring_perf.sh's PMQOS=1.
+    std::optional<axon::CpuLatencyHold> latency_hold;
+    if (const char* us = std::getenv("BENCH_CPU_LATENCY_US")) {
+        const char* c = std::getenv("BENCH_CPU_LATENCY_CPU");
+        latency_hold = axon::CpuLatencyHold::acquire(std::atoi(us), c ? std::atoi(c) : -1);
+        if (!latency_hold) {
+            std::fprintf(stderr, "CpuLatencyHold::acquire failed: %s\n", std::strerror(errno));
+            std::exit(2);
+        }
+    }
 
     // BENCH_SRC_OFFSET shifts the host source by that many bytes (diagnosing 4 KiB aliasing between
     // source and destination); BENCH_ADDR_LOG prints both addresses modulo 4096 once.

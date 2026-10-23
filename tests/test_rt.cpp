@@ -28,7 +28,8 @@ AXON_TEST(now_ns_monotonic) {
 }
 
 // Sleeps for most of the wait and spins only the tail: reaches the deadline, and uses far less CPU
-// time than wall time. A past deadline and spin_us = 0 return without spinning.
+// time than wall time. A past deadline returns at once; spin_us = 0 is a sleep. Only the upper CPU
+// bound is checked: preemption during the spin (a loaded CI host) lowers thread CPU time.
 AXON_TEST(sleep_until_prewarmed) {
     auto cpu_ns = [] {
         struct timespec ts;
@@ -41,8 +42,7 @@ AXON_TEST(sleep_until_prewarmed) {
     const std::uint64_t cpu = cpu_ns() - c0;
     CHECK(r >= deadline);
     CHECK(rt_now_ns() >= deadline);
-    CHECK(cpu >= 1'500'000);   // the spin ran (about 2 ms)
-    CHECK(cpu < 15'000'000);   // but most of the 30 ms was slept
+    CHECK(cpu < 15'000'000);   // most of the 30 ms was slept, not spun
     const std::uint64_t past = rt_now_ns();
     CHECK(rt_sleep_until_prewarmed(past - 1000, 2000) >= past);  // already passed: returns at once
     CHECK(rt_now_ns() - past < 1'000'000);

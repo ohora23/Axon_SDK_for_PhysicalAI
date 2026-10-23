@@ -260,7 +260,7 @@ std::uint64_t rt_sleep_until_prewarmed(std::uint64_t deadline_ns, std::uint32_t 
     const std::uint64_t spin_ns = static_cast<std::uint64_t>(spin_us) * 1000;
     std::uint64_t now = rt_now_ns();
     // clock_nanosleep has no CLOCK_MONOTONIC_RAW: sleep a relative interval, re-measured after
-    // each interruption; the spin below lands on the RAW deadline exactly.
+    // each interruption. The spin below ends on the RAW deadline, provided the sleep ended before it.
     while (deadline_ns > spin_ns && now < deadline_ns - spin_ns) {
         const std::uint64_t rem = deadline_ns - spin_ns - now;
         struct timespec ts;

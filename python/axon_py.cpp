@@ -354,7 +354,8 @@ PYBIND11_MODULE(axon, m) {
     m.def("rt_now_ns", &rt_now_ns, "CLOCK_MONOTONIC_RAW nanoseconds (RT-safe).");
     m.def("rt_sleep_until_prewarmed", &rt_sleep_until_prewarmed, py::arg("deadline_ns"), py::arg("spin_us"),
           py::call_guard<py::gil_scoped_release>(),
-          "Sleep until spin_us before deadline_ns (rt_now_ns clock), then busy-wait to it; returns rt_now_ns().");
+          "Sleep until spin_us before deadline_ns (rt_now_ns clock), then busy-wait to it; returns rt_now_ns(). "
+          "Ctrl-C is not seen until it returns: keep deadlines short.");
 
     struct PyLatencyHold {
         std::optional<CpuLatencyHold> hold;

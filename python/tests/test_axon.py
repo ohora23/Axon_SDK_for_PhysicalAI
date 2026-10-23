@@ -104,7 +104,25 @@ def check_publish_rejects() -> None:
     del pub, pool
 
 
+def check_cpu_latency_hold() -> None:
+    """cpu_latency_hold: bad args raise, rights errors surface as PermissionError, `with` releases."""
+    assert 0 in axon.rt_core_siblings(0)
+    try:
+        axon.cpu_latency_hold(-1)
+        raise AssertionError("negative latency accepted")
+    except OSError:
+        pass
+    for cpu in (-1, 0):  # system-wide, then per-CPU (needs root or tools/udev/)
+        try:
+            with axon.cpu_latency_hold(1, cpu=cpu) as h:
+                assert h.active and h.cpu == cpu and h.max_latency_us == 1
+            assert not h.active
+        except PermissionError:
+            print(f"  cpu_latency_hold(cpu={cpu}) skipped: not writable")
+
+
 def main() -> int:
+    check_cpu_latency_hold()
     # Basic smoke of the module surface before the fork.
     assert axon.rt_now_ns() > 0
     pool = axon.TensorPool.create(n_buffers=4, buffer_size=4096)

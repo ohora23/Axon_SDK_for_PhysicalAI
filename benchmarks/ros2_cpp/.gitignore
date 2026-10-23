@@ -26,3 +26,4 @@ results/*
 !results/clock_probe.txt
 !results/ring_perf_second_rep.jsonl
 !results/src_offset_probe.txt
+!results/cpu_latency_hold_probe.txt

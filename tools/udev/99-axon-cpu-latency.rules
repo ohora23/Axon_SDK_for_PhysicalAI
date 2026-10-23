@@ -1,0 +1,15 @@
+# Lets group axon-rt hold CPU wake-up latency limits without root, for axon::CpuLatencyHold:
+#   - /dev/cpu_dma_latency (cpu = -1, system-wide; root-only by default)
+#   - /sys/devices/system/cpu/cpuN/power/pm_qos_resume_latency_us (cpu >= 0, per CPU)
+#
+# Any member can keep every CPU out of deep idle (power and heat) or clear another user's
+# per-CPU limit (the attribute holds a single request), so keep the group to the RT users.
+#
+#   sudo groupadd -f axon-rt && sudo usermod -aG axon-rt "$USER"     # then log in again
+#   sudo cp tools/udev/99-axon-cpu-latency.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=cpu --subsystem-match=misc --action=add
+#
+# A CPU hot-added at runtime may get its add event before the attribute exists; re-run the
+# trigger then.
+KERNEL=="cpu_dma_latency", SUBSYSTEM=="misc", GROUP="axon-rt", MODE="0660"
+SUBSYSTEM=="cpu", ACTION=="add", RUN+="/bin/chgrp axon-rt /sys%p/power/pm_qos_resume_latency_us", RUN+="/bin/chmod g+w /sys%p/power/pm_qos_resume_latency_us"

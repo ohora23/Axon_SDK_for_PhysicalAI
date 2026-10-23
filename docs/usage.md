@@ -154,6 +154,63 @@ than 128 streams, or on the Iceoryx2 backend it falls back to polling every
 100 µs. Keep `wait_any` out of the RT loop itself: the RT loop stays on
 `latest_view()` at its own rate.
 
+### Keep a low-rate producer's core awake (CPU wake-up latency)
+
+A producer that sleeps between frames, say a 30 Hz camera, lets its core drop into a deep
+idle state. It then wakes into a lower clock and writes the frame slowly. Measured on a Ryzen
+9800X3D, a 30 Hz producer writing 16 MiB on its own core gave these numbers
+(one PC, 2 runs per setting across two sessions; benchmarks/ros2_cpp, "The producer's clock
+decides low-rate host numbers"):
+
+| idle states allowed | p50 | clock |
+|---|---|---|
+| all (default) | 397-424 µs | 3.1-3.5 GHz |
+| up to C2 (20 µs limit) | 418-428 µs | 3.0-3.6 GHz |
+| up to C1 (**1 µs limit**) | 254-271 µs system-wide, 241-242 µs on the producer's CPU only | 4.6-5.0 GHz |
+| polling only (0 µs) | 234-260 µs | 5.2 GHz |
+
+`CpuLatencyHold` sets such a limit for as long as it lives. **1 µs on the producer's CPU** keeps
+most of the gain: idle cores halt instead of spinning, as they would with polling (0), and the
+other cores keep their deep idle states.
+
+```cpp
+RtSetupConfig cfg;
+cfg.set_cpu_affinity = true;
+cfg.cpu_id = 6;              // pin the producer...
+cfg.cpu_latency_us = 1;      // ...and keep that core out of C2 and deeper, for the process lifetime
+rt_setup_memory_and_sched(cfg);
+
+// or scoped, for one phase:
+if (auto hold = CpuLatencyHold::acquire(/*max_latency_us=*/1, /*cpu=*/6)) { run_capture(); }
+else perror("CpuLatencyHold");   // EACCES: see below
+```
+
+```python
+with axon.cpu_latency_hold(1, cpu=6):
+    run_capture()
+```
+
+- **`cpu = -1`** applies the limit system-wide through `/dev/cpu_dma_latency`. That needs root
+  by default. The kernel drops the request when the fd closes, including when the process dies.
+  Every core then stays awake, which costs the most power.
+- **`cpu >= 0`** applies it to that core only, through `cpuN/power/pm_qos_resume_latency_us`. The
+  hold restores the old value on destruction. A process killed without unwinding leaves the
+  limit in place. The attribute holds one request: give each CPU one owner, and nest holds on
+  it only LIFO.
+- Without root, both paths need [`tools/udev/99-axon-cpu-latency.rules`](../tools/udev/99-axon-cpu-latency.rules),
+  which grants a dedicated `axon-rt` group. Any member can keep every core awake, so keep that
+  group to the RT users.
+- A hold belongs to the process that took it: a `fork()`ed child neither restores nor closes it.
+  Holds are not thread-safe: take and release them from one thread. A second
+  `rt_setup_memory_and_sched` call replaces the first call's hold.
+- In Python, prefer `with`. A hold left to the garbage collector may never be released at
+  interpreter exit, which matters for the per-CPU path.
+- Pin the producer and an RT consumer to different physical cores. `rt_core_siblings(cpu)` lists
+  a core's SMT siblings.
+- The C-state names and exit latencies of a machine are in
+  `/sys/devices/system/cpu/cpu0/cpuidle/state*/{name,latency}`. Pick the limit just below the
+  first state that hurts, then measure; `benchmarks/ros2_cpp/run_clock_probe.sh` shows how.
+
 ---
 
 ## Delivery semantics & choosing `n_buffers`

@@ -395,6 +395,24 @@ this noise. The 16 MiB ranking holds in the pinned run: axon (4 buffers) 373 µs
 iceoryx2's 219. For stable low-rate numbers, pin the producer and hold PM QoS 0, as an RT
 robot computer would.
 
+The SDK now provides this as `axon::CpuLatencyHold` (`RtSetupConfig::cpu_latency_us`,
+Python `axon.cpu_latency_hold`; see [docs/usage.md](../../docs/usage.md)). bench's producer
+takes it as `BENCH_CPU_LATENCY_US` / `BENCH_CPU_LATENCY_CPU`. Through it, with the producer
+pinned to CPU 6 (`results/cpu_latency_hold_probe.txt`, 2 runs each):
+
+| limit | p50 | clock |
+|---|---|---|
+| none | 397-424 µs | 3.1-3.5 GHz |
+| 20 µs (C2 allowed), system-wide | 418-428 µs | 3.0-3.6 GHz |
+| **1 µs (C1), CPU 6 only** | **241-242 µs** | **4.9-5.0 GHz** |
+| 1 µs, system-wide | 254-271 µs | 4.6-4.9 GHz |
+| 0 µs (polling), CPU 6 only / system-wide | 234-247 / 235-260 µs | 5.2 GHz |
+
+C2 (18 µs exit latency) is already deep enough to cost the clock. A 1 µs limit on the
+producer's core alone keeps it, and the other cores keep their deep idle states. This is one
+machine with 2 runs per row. The per-CPU rows come from the second session only, and the
+system-wide rows from both, so treat small differences between them as noise.
+
 Raw data: `results/ring_perf_rep.jsonl` (pinned, PM QoS 0; `PIN=6,7 PMQOS=1 run_ring_perf.sh`),
 `results/ring_perf_unpinned_rep.jsonl`, `results/ring_perf_pinned_noqos_rep.jsonl`,
 `results/ring_perf_second_rep.jsonl`, `results/ring_perf_first_rep.jsonl`. All need `kernel.perf_event_paranoid` ≤ 1.
@@ -527,9 +545,12 @@ line) and `results/intra_axon_ref.jsonl` (the spinning axon cells, same session 
 columns).
 
 **PM QoS 0** means that while the runner held `/dev/cpu_dma_latency` open with the value 0, the
-kernel kept every core out of C-states deeper than C1. Real-time robot computers usually do
-this, or disable deep C-states in the BIOS. On this Ubuntu install the device is writable by
-the `plugdev` group, so no sudo is needed, and the setting ends when the file is closed.
+kernel kept every core in polling idle (exit latency 0, so not even C1). Real-time robot
+computers often do this, or disable deep C-states in the BIOS. A 1 µs limit (C1 allowed) keeps
+most of the effect at far less power; see `axon::CpuLatencyHold` below. On this PC the device
+was writable without sudo only because of a misconfigured third-party udev rule. The device is
+root-only by default; [`tools/udev/99-axon-cpu-latency.rules`](../../tools/udev/99-axon-cpu-latency.rules)
+grants a dedicated group. The setting ends when the file is closed.
 
 ## 1 → N fan-out
 

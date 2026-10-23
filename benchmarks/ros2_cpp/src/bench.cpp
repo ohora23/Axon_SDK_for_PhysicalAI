@@ -485,12 +485,16 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
     }
     if (nsubs_wait > 1) std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-    std::vector<uint8_t> src(bytes);
-    for (int i = 0; i < (int)bytes; ++i) src[i] = (uint8_t)(i * 31 & 0xff);
+    // BENCH_SRC_OFFSET shifts the host source by that many bytes (diagnosing 4 KiB aliasing between
+    // source and destination); BENCH_ADDR_LOG prints both addresses modulo 4096 once.
+    const std::size_t src_off = std::getenv("BENCH_SRC_OFFSET") ? std::strtoul(std::getenv("BENCH_SRC_OFFSET"), nullptr, 10) : 0;
+    std::vector<uint8_t> src_buf(bytes + src_off);
+    uint8_t* const srcp = src_buf.data() + src_off;
+    for (int i = 0; i < (int)bytes; ++i) srcp[i] = (uint8_t)(i * 31 & 0xff);
     CUdeviceptr d_src = 0;
     if (gpu == 1) {
         check_cuda(cuMemAlloc(&d_src, bytes), "cuMemAlloc src");
-        check_cuda(cuMemcpyHtoD(d_src, src.data(), bytes), "cuMemcpyHtoD src");
+        check_cuda(cuMemcpyHtoD(d_src, srcp, bytes), "cuMemcpyHtoD src");
     }
 
     struct timeval tv0, tv1;
@@ -503,7 +507,10 @@ static int run_pub_axon(int bytes, int frames, int rate_hz, int gpu) {
         AcquiredDescriptor a = pub->acquire_descriptor();
 
         if (gpu == 0) {
-            std::memcpy(a.host_view, src.data(), bytes);
+            if (seq_i == 1 && std::getenv("BENCH_ADDR_LOG"))
+                std::fprintf(stderr, "addr src%%4096=%zu dst%%4096=%zu\n", (std::size_t)(uintptr_t)srcp % 4096,
+                             (std::size_t)(uintptr_t)a.host_view % 4096);
+            std::memcpy(a.host_view, srcp, bytes);
             std::memcpy(a.host_view, &t0, 8);
             std::memcpy((uint8_t*)a.host_view + 8, &seq, 8);
             std::memcpy((uint8_t*)a.host_view + bytes - 8, &seq, 8);

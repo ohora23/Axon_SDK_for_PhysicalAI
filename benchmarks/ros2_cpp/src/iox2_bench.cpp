@@ -67,7 +67,10 @@ int run_pub(std::size_t bytes, int frames, int rate_hz) {
     auto node = iox2::NodeBuilder().create<iox2::ServiceType::Ipc>().value();
     auto service = open_service(node, 8);
     auto publisher = service.publisher_builder().initial_max_slice_len(bytes).create().value();
-    std::vector<std::uint8_t> src(bytes);
+    // BENCH_SRC_OFFSET / BENCH_ADDR_LOG: as in bench.cpp (4 KiB aliasing diagnosis).
+    const std::size_t src_off = std::getenv("BENCH_SRC_OFFSET") ? std::strtoul(std::getenv("BENCH_SRC_OFFSET"), nullptr, 10) : 0;
+    std::vector<std::uint8_t> src_buf(bytes + src_off);
+    std::uint8_t* const src = src_buf.data() + src_off;
     for (std::size_t i = 0; i < bytes; ++i) src[i] = static_cast<std::uint8_t>(i * 31 & 0xff);
 
     // Like the ROS 2 producers: wait for the subscriber, then 500 ms.
@@ -81,7 +84,10 @@ int run_pub(std::size_t bytes, int frames, int rate_hz) {
         const std::uint64_t t0 = now_ns();
         auto sample = publisher.loan_slice_uninit(bytes).value();
         auto* dst = reinterpret_cast<std::uint8_t*>(sample.payload_mut().data());
-        std::memcpy(dst, src.data(), bytes);
+        if (seq == 1 && std::getenv("BENCH_ADDR_LOG"))
+            std::fprintf(stderr, "addr src%%4096=%zu dst%%4096=%zu\n", reinterpret_cast<std::uintptr_t>(src) % 4096,
+                         reinterpret_cast<std::uintptr_t>(dst) % 4096);
+        std::memcpy(dst, src, bytes);
         std::memcpy(dst, &t0, 8);
         std::memcpy(dst + 8, &seq, 8);
         std::memcpy(dst + bytes - 8, &seq, 8);

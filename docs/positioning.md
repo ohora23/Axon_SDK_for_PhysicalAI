@@ -129,8 +129,8 @@ competition for the vision/recording use cases.
   Iceoryx2 as an optional metadata backend. They don't natively carry GPU buffers,
   and they are queue/throughput oriented. **Measured on the host** (iceoryx2 0.10, C++): within
   about 1 µs of axon from 64 B to 4 MiB, and faster from 16 MiB, where axon's time grows with its
-  ring depth (16 MiB: 238 vs 474 µs). Hardware counters point to cache capacity: with 4 buffers
-  21 % of each frame comes from DRAM, with 1 almost none, and then axon matches iceoryx2. On the
+  ring depth (16 MiB, clock held: 219 vs 373 µs). Hardware counters point to cache capacity: with 4
+  buffers 15 % of each frame comes from DRAM, with 1 almost none, and then axon matches iceoryx2. On the
   host, axon has no latency edge over it.
 - **DDS + shared memory (Cyclone, Fast DDS)** — zero-copy on host via loaned
   samples; the backbone under ROS 2. Cross-node capable, GPU-agnostic.

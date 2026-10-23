@@ -1,0 +1,7 @@
+# 2026-10-23T23:43:42+09:00 cpus_online=0-1,5-9,13-15 16 MiB host, axon 1 buffer, 150 frames at 30 Hz
+producer on the consumer core's SMT sibling  p50  290.1 us  avg clock 5.14 GHz
+producer on its own idle core                p50  427.6 us  avg clock 3.28 GHz
+producer on its own core, PM QoS 0           p50  298.6 us  avg clock 5.18 GHz
+producer on the consumer core's SMT sibling  p50  301.6 us  avg clock 5.13 GHz
+producer on its own idle core                p50  427.6 us  avg clock 3.21 GHz
+producer on its own core, PM QoS 0           p50  250.3 us  avg clock 5.18 GHz

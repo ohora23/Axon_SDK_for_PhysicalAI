@@ -59,7 +59,7 @@ flowchart LR
 | GPU 메모리를 공유하는 ROS 2 전송 대비 GPU → GPU (공식 `rosidl::Buffer` CUDA 백엔드, ros2_cuda_ipc) | CUDA MPS를 켜면, 프레임에 커널을 실행하는 소비자 기준 1 MiB에서 **약 2× 낮음**(≈23 vs 44~49 µs, 4 MiB에서는 1.6×), 결과를 복사해 가는 소비자 기준 1.5~2×. MPS가 없으면 복사해 가는 소비자에서만 약 5× 낮다(≈25 vs ≈125 µs). 커널을 실행하는 소비자는 프로세스 간 GPU 컨텍스트 전환 비용(약 100 µs)을 axon에서도 낸다(129 vs 122~124 µs) |
 | 프로세스 간 axon vs **한 프로세스 안의** ROS 2 (intra-process `unique_ptr` / type adapter) | **느리지 않다**: axon 소비자가 spin하고 ROS 2가 `spin_some` 루프로 받을 때 4~5.5 µs 빠르고(예: GPU 24 vs 28 µs), 두 소비자가 모두 blocking일 때(깊은 C-state 끔) 1.3~2 µs 빠르다. 노드를 한 프로세스로 모아도 axon보다 빨라지지 않는다 |
 | 구독자 1 → 8개, GPU 1 MiB (이벤트 방식 소비자, 깊은 C-state 끔) | **25 → 38 µs** vs 154 → 450 µs. 생산자와 구독자 전체 CPU 0.021 vs 0.26 cores |
-| 다른 공유 메모리 전송 대비 host → host (iceoryx2 0.10, Cyclone DDS + iceoryx, zenoh SHM), 64 B~64 MiB | 4 MiB까지는 **iceoryx2와 비슷하다**(1 MiB: 15 vs 17 µs, Cyclone loan 31, zenoh 125). **16 MiB부터는 더 느리다**(474 vs 238 µs). 이 시간은 axon의 ring 깊이에 따라 늘어난다. host 경로는 axon이 이기는 곳이 아니다 |
+| 다른 공유 메모리 전송 대비 host → host (iceoryx2 0.10, Cyclone DDS + iceoryx, zenoh SHM), 64 B~64 MiB | 4 MiB까지는 **iceoryx2와 비슷하다**(1 MiB: 15 vs 17 µs, Cyclone loan 31, zenoh 125). 기본값인 버퍼 4개짜리 ring에서는 **16 MiB부터 더 느리다**(클럭을 고정한 측정에서 373 vs 219 µs). ring이 깊을수록 DRAM 트래픽이 늘기 때문이며, 버퍼 1개면 iceoryx2와 같다. host 경로는 axon이 이기는 곳이 아니다 |
 | host → host, 1 MiB, ROS 2 loaned message + data-sharing 대비 (#43) | **2.4× 낮음** (15 µs vs 36 µs), 4 MiB에서는 1.4× |
 | 다중스트림 로봇 워크로드 @ 297 MB/s (같은 비교, 이벤트 방식 소비자) | 카메라 p50 **29 vs 44 µs**, **CPU 절반** (0.019 vs 0.038 cores), 캐시미스 2.8× 적음, 모든 프레임 전달 |
 | RT 루프 page fault | **0 / frame** |

@@ -29,3 +29,4 @@ results/*
 !results/cpu_latency_hold_probe.txt
 !results/spread_probe.jsonl
 !results/spread_dose.jsonl
+!results/frame_clock.jsonl

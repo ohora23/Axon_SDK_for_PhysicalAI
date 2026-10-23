@@ -14,6 +14,9 @@
 #include <fstream>
 #include <string>
 
+#include <sys/wait.h>
+#include <unistd.h>
+
 using namespace axon;
 
 AXON_TEST(now_ns_monotonic) {
@@ -99,6 +102,60 @@ AXON_TEST(latency_hold_per_cpu_sets_and_restores) {
         REQUIRE(zero.has_value());
         CHECK(read_attr(0) == "n/a");
     }  // zero restores "5", then moved restores the original
+    CHECK(read_attr(0) == before);
+}
+
+AXON_TEST(latency_hold_unknown_cpu_is_enoent) {
+    errno = 0;
+    CHECK(!CpuLatencyHold::acquire(1, 9999));
+    CHECK(errno == ENOENT);
+}
+
+AXON_TEST(latency_hold_forked_child_does_not_restore) {
+    const std::string before = read_attr(0);
+    auto h = CpuLatencyHold::acquire(7, 0);
+    if (!h) {
+        std::printf("  (skipped: per-CPU PM QoS not writable)\n");
+        return;
+    }
+    const pid_t pid = fork();
+    if (pid == 0) {
+        h.reset();  // the child's copy: must leave the parent's limit alone
+        std::_Exit(read_attr(0) == "7" ? 0 : 1);
+    }
+    int st = 0;
+    waitpid(pid, &st, 0);
+    CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0);
+    CHECK(read_attr(0) == "7");
+    h.reset();
+    CHECK(read_attr(0) == before);
+}
+
+AXON_TEST(setup_twice_restores_the_original) {
+    // rt_setup's hold lives until process exit, so run it in a child that exits normally and
+    // check from outside that the very first value came back (not the first call's limit).
+    const std::string before = read_attr(0);
+    if (!CpuLatencyHold::acquire(1, 0)) {
+        std::printf("  (skipped: per-CPU PM QoS not writable)\n");
+        return;
+    }  // (released right away)
+    const pid_t pid = fork();
+    if (pid == 0) {
+        RtSetupConfig cfg;
+        cfg.sched_priority = 0;
+        cfg.lock_all_memory = false;
+        cfg.prefault_heap_bytes = 0;
+        cfg.set_cpu_affinity = true;
+        cfg.cpu_id = 0;
+        cfg.cpu_latency_us = 5;
+        if (rt_setup_memory_and_sched(cfg) != 0 || read_attr(0) != "5") std::_Exit(2);
+        cfg.cpu_latency_us = 3;
+        if (rt_setup_memory_and_sched(cfg) != 0 || read_attr(0) != "3") std::_Exit(3);
+        std::exit(0);  // runs static destructors: the hold restores
+    }
+    int st = 0;
+    waitpid(pid, &st, 0);
+    CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0);
     CHECK(read_attr(0) == before);
 }
 

@@ -33,7 +33,7 @@ sampler() { while :; do
 done; }
 sampler & SP=$!
 QP=
-if [ "$MODE" = pmqos ]; then  # /dev/cpu_dma_latency is group plugdev on Ubuntu; released on exit
+if [ "$MODE" = pmqos ]; then  # needs write access to /dev/cpu_dma_latency (root, or tools/udev/); released on exit
   python3 -c "import struct,time; f=open('/dev/cpu_dma_latency','wb',buffering=0); f.write(struct.pack('i',0)); time.sleep(1e9)" & QP=$!
 fi
 # The runners write intra_rep.jsonl / fanout_rep.jsonl; a pmqos pass must not clobber the default set.

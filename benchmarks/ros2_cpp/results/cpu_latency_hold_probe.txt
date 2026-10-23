@@ -1,7 +1,7 @@
 # 2026-10-24, 16 MiB host, axon 1 buffer, 150 frames at 30 Hz, producer pinned to CPU 6, consumer
 # to CPU 7. axon::CpuLatencyHold through bench's BENCH_CPU_LATENCY_US / BENCH_CPU_LATENCY_CPU.
 # p50 and the producer's average clock (cycles / task-clock). cpuidle on this CPU: POLL 0, C1 1,
-# C2 18, C3 350 µs exit latency.
+# C2 18, C3 350 µs exit latency. CPUs online 0-1,5-9,13-15 (2-4, 10-12 offlined, see the PC note).
 # session 1 (system-wide only; per-CPU not yet writable)
 no hold                       424.4 us 3.27 GHz | 396.7 us 3.50 GHz
 system-wide 0 us (POLL only)  243.3 us 5.17 GHz | 235.4 us 5.18 GHz

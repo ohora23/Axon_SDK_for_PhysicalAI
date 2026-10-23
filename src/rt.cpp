@@ -7,7 +7,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
-#include <fstream>
 #include <sstream>
 
 #include <fcntl.h>
@@ -34,13 +33,25 @@ std::string cpu_attr(int cpu, const char* rel) {
     return "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/" + rel;
 }
 
+// One line of a sysfs file, newline stripped; errno from open/read on failure (ENOENT for a
+// missing CPU, EACCES, ...), EIO for an empty value.
 bool read_line(const std::string& path, std::string& out) {
-    std::ifstream f(path);
-    if (!f) {
-        errno = ENOENT;
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    char buf[64];
+    const ssize_t n = ::read(fd, buf, sizeof buf - 1);
+    const int err = errno;
+    ::close(fd);
+    if (n < 0) {
+        errno = err;
         return false;
     }
-    std::getline(f, out);
+    out.assign(buf, static_cast<std::size_t>(n));
+    while (!out.empty() && (out.back() == '\n' || out.back() == ' ')) out.pop_back();
+    if (out.empty()) {
+        errno = EIO;
+        return false;
+    }
     return true;
 }
 
@@ -75,7 +86,7 @@ std::optional<CpuLatencyHold> CpuLatencyHold::acquire(int max_latency_us, int cp
             errno = err;
             return std::nullopt;
         }
-        return CpuLatencyHold(fd, -1, max_latency_us, {});
+        return CpuLatencyHold(fd, -1, max_latency_us, {}, {});
     }
     // sysfs reads "n/a" for a 0 µs limit and "0" for no limit, and takes the same strings back,
     // so the value read here restores exactly.
@@ -83,14 +94,15 @@ std::optional<CpuLatencyHold> CpuLatencyHold::acquire(int max_latency_us, int cp
     std::string prev;
     if (!read_line(path, prev)) return std::nullopt;
     if (!write_str(path, max_latency_us == 0 ? "n/a" : std::to_string(max_latency_us))) return std::nullopt;
-    return CpuLatencyHold(-1, cpu, max_latency_us, prev);
+    return CpuLatencyHold(-1, cpu, max_latency_us, path, prev);
 }
 
-CpuLatencyHold::CpuLatencyHold(int fd, int cpu, int us, std::string restore) noexcept
-    : fd_(fd), cpu_(cpu), us_(us), restore_(std::move(restore)) {}
+CpuLatencyHold::CpuLatencyHold(int fd, int cpu, int us, std::string path, std::string restore) noexcept
+    : fd_(fd), cpu_(cpu), us_(us), owner_pid_(::getpid()), path_(std::move(path)), restore_(std::move(restore)) {}
 
 CpuLatencyHold::CpuLatencyHold(CpuLatencyHold&& o) noexcept
-    : fd_(o.fd_), cpu_(o.cpu_), us_(o.us_), restore_(std::move(o.restore_)) {
+    : fd_(o.fd_), cpu_(o.cpu_), us_(o.us_), owner_pid_(o.owner_pid_), path_(std::move(o.path_)),
+      restore_(std::move(o.restore_)) {
     o.fd_ = -1;
     o.restore_.clear();
 }
@@ -101,6 +113,8 @@ CpuLatencyHold& CpuLatencyHold::operator=(CpuLatencyHold&& o) noexcept {
         fd_ = o.fd_;
         cpu_ = o.cpu_;
         us_ = o.us_;
+        owner_pid_ = o.owner_pid_;
+        path_ = std::move(o.path_);
         restore_ = std::move(o.restore_);
         o.fd_ = -1;
         o.restore_.clear();
@@ -111,15 +125,19 @@ CpuLatencyHold& CpuLatencyHold::operator=(CpuLatencyHold&& o) noexcept {
 CpuLatencyHold::~CpuLatencyHold() { release(); }
 
 void CpuLatencyHold::release() noexcept {
+    const int saved = errno;
+    // A fork()ed child inherits the hold but must not undo the parent's limit. (Its copy of the
+    // fd still keeps a system-wide request alive until the child exits or execs; O_CLOEXEC
+    // covers exec.)
+    const bool owner = ::getpid() == owner_pid_;
     if (fd_ >= 0) {
-        ::close(fd_);
+        if (owner) ::close(fd_);
         fd_ = -1;
-    } else if (cpu_ >= 0 && !restore_.empty()) {
-        const int saved = errno;
-        write_str(cpu_attr(cpu_, "power/pm_qos_resume_latency_us"), restore_);
-        errno = saved;
+    } else if (!restore_.empty()) {
+        if (owner) write_str(path_, restore_);
         restore_.clear();
     }
+    errno = saved;
 }
 
 std::vector<int> rt_core_siblings(int cpu) {
@@ -128,10 +146,16 @@ std::vector<int> rt_core_siblings(int cpu) {
     if (cpu < 0 || !read_line(cpu_attr(cpu, "topology/thread_siblings_list"), list)) return out;
     std::stringstream ss(list);  // e.g. "6,14" or "0-1"
     for (std::string item; std::getline(ss, item, ',');) {
-        const auto dash = item.find('-');
-        const int lo = std::atoi(item.c_str());
-        const int hi = dash == std::string::npos ? lo : std::atoi(item.c_str() + dash + 1);
-        for (int c = lo; c <= hi; ++c) out.push_back(c);
+        char* end = nullptr;
+        const long lo = std::strtol(item.c_str(), &end, 10);
+        if (end == item.c_str()) return {};  // malformed: report nothing rather than guess
+        long hi = lo;
+        if (*end == '-') {
+            const char* h = end + 1;
+            hi = std::strtol(h, &end, 10);
+            if (end == h) return {};
+        }
+        for (long c = lo; c <= hi; ++c) out.push_back(static_cast<int>(c));
     }
     return out;
 }
@@ -179,6 +203,7 @@ int rt_setup_memory_and_sched(const RtSetupConfig& cfg) {
 
     if (cfg.cpu_latency_us >= 0) {
         const int cpu = cfg.set_cpu_affinity ? cfg.cpu_id : -1;
+        g_setup_latency_hold.reset();  // a second call replaces the first hold, restoring first
         auto hold = CpuLatencyHold::acquire(cfg.cpu_latency_us, cpu);
         if (!hold) return -1;
         g_setup_latency_hold = std::move(hold);

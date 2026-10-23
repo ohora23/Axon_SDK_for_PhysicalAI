@@ -357,8 +357,9 @@ PYBIND11_MODULE(axon, m) {
         std::optional<CpuLatencyHold> hold;
     };
     py::class_<PyLatencyHold>(m, "CpuLatencyHold",
-                              "Wake-up latency limit; released by release(), on leaving a `with` "
-                              "block, or when garbage-collected. See axon::CpuLatencyHold.")
+                              "Wake-up latency limit; released by release() or on leaving a `with` "
+                              "block (prefer `with`: a hold left to the GC may outlive interpreter "
+                              "exit on the per-CPU path). See axon::CpuLatencyHold.")
         .def_property_readonly("cpu", [](const PyLatencyHold& s) { return s.hold ? s.hold->cpu() : -1; })
         .def_property_readonly("max_latency_us",
                                [](const PyLatencyHold& s) { return s.hold ? s.hold->max_latency_us() : -1; })

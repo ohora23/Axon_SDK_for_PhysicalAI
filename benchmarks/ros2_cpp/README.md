@@ -475,6 +475,13 @@ a core per 33 ms frame instead of a core that never halts. Spinning for less tha
 itself (250 µs) does almost nothing. This is one machine and one cpufreq setup; another CPU or
 governor will have its own ramp.
 
+Rerun after a kernel update (6.8.0-146 → 7.0.0-38, which also moved the default EPP from
+`performance` to `balance_performance`; `results/frame_clock_k7.jsonl`, 2 runs): the same
+picture. A 1 µs limit gave p50 214-217 / p90 419-421 µs with 14-26 % of frames below 4 GHz;
+0 µs gave 213 / 223-225 µs and a 2 ms spin 212-213 / 217-318 µs, both with no frame below
+4 GHz. The 318 µs run had its tail at full clock, so it was not the clock; the cache effect
+above is the likely cause, but DRAM fills were not logged in this probe.
+
 Raw data: `results/ring_perf_rep.jsonl` (pinned, PM QoS 0; `PIN=6,7 PMQOS=1 run_ring_perf.sh`),
 `results/ring_perf_unpinned_rep.jsonl`, `results/ring_perf_pinned_noqos_rep.jsonl`,
 `results/ring_perf_second_rep.jsonl`, `results/ring_perf_first_rep.jsonl`. All need `kernel.perf_event_paranoid` ≤ 1.

@@ -30,3 +30,4 @@ results/*
 !results/spread_probe.jsonl
 !results/spread_dose.jsonl
 !results/frame_clock.jsonl
+!results/frame_clock_k7.jsonl

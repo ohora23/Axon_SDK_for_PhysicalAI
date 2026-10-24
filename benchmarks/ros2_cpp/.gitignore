@@ -31,3 +31,4 @@ results/*
 !results/spread_dose.jsonl
 !results/frame_clock.jsonl
 !results/frame_clock_k7.jsonl
+!results/load_tail_rep.jsonl

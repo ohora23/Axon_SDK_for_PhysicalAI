@@ -690,8 +690,8 @@ and ROS 2 loaned (Fast DDS data-sharing profile), 1 and 4 MiB, 100 Hz, 3000 fram
 kernel 7.0.0-38. Busy-polling consumers, as in the other host cells. Pinned runs give each process a
 whole physical core (producer CPUs 6,14, consumer 7,15) and hold the producer core at 0 µs wake-up
 latency; the load stays off those four CPUs. Squeezing a ROS 2 process onto one logical CPU instead
-put its executor and DDS threads behind the polling one (603 µs p50 at 1 MiB, idle), so that layout
-was not used. Load: `stress-ng --cpu` on the six other CPUs (`cpu`), `stress-ng --stream` on CPUs 0
+put its executor and DDS threads behind the polling one (603 µs p50 at 1 MiB, idle, in a 200-frame
+trial run that is not in the results), so that layout was not used. Load: `stress-ng --cpu` on the six other CPUs (`cpu`), `stress-ng --stream` on CPUs 0
 and 1 (`mem`), and `--cpu` on every CPU with nothing pinned (`cpu_unpinned`).
 
 p50 / p99 in µs, the two runs side by side:
@@ -707,21 +707,26 @@ p50 / p99 in µs, the two runs side by side:
 | cpu, unpinned | 1 MiB | 321-495 / 6196-6664 | 510-706 / 7936-7940 | 1545-1837 / 6845-7371 |
 | cpu, unpinned | 4 MiB | 658-714 / 6008-8163 | 639-787 / 6077-8830 | 1636-1907 / 7164-8446 |
 
-- **Placement decides the tail more than the transport.** Unpinned under CPU load, every transport
-  has a p90 of 3-5 ms and a p99 of 6-9 ms: the scheduler, not the transport, sets the numbers.
-- **Pinned to their own cores, axon and iceoryx2 keep their median under CPU load** (within about
-  10 µs at 1 MiB). ROS 2 loaned does not: its p50 rises from 35-40 to 548-584 µs at 1 MiB. Its
-  threads are on its own two CPUs too, so the cause is not CPU time on those cores; this run does not
-  show what it is.
-- **p99 under load is not stable between runs for any transport** (axon 4 MiB 261 vs 6255 µs,
+- **Sharing CPUs with the load decides the tail more than the transport.** With nothing pinned,
+  the load on every CPU and no wake-up limit, every transport has a p90 of 3-5 ms and a p99 of 6-9 ms.
+  Those three changes from the pinned `cpu` rows were made together, so this does not say which of
+  them matters most.
+- **Pinned to their own cores, axon and iceoryx2 keep their 1 MiB median under CPU load** (within
+  about 10 µs); at 4 MiB axon's rises from 69-120 to 139-175 µs, iceoryx2's stays at 97-103. ROS 2
+  loaned's p50 rises from 35-40 to 548-584 µs at 1 MiB. The load processes are not on its two CPUs
+  either; this run does not show the cause.
+- **p99 under CPU load is not stable between runs for any transport** (axon 4 MiB 261 vs 6255 µs,
   iceoryx2 1 MiB 133 vs 1560 µs). The pinned cores still take timer ticks, kernel threads and
   interrupts (no `isolcpus` / `nohz_full`, no SCHED_FIFO), so two runs do not rank the transports by
   p99. ROS 2 loaned's p99 is the highest of the three at idle and under memory load in both
   runs; under CPU load the runs overlap.
 - **Memory-bandwidth load raises every median** about equally (4 MiB: 713-875 µs against 68-120 idle):
-  the payload write competes for DRAM, the effect measured in the L3 section above.
-- **Not every frame arrives under load:** a consumer that falls behind reads the latest frame, so
-  frames_seen drops (lowest: axon 2842 of 3000, `cpu` 4 MiB, the run with the 6255 µs p99).
+  the payload is evicted from L3 and its write competes for DRAM traffic, the effect measured in the
+  L3 section above.
+- **Under load more frames are skipped:** a consumer that falls behind reads the latest frame, so
+  frames_seen drops (lowest: axon 2842 of 3000, `cpu` 4 MiB, the run with the 6255 µs p99; idle runs
+  lost at most 2). The percentiles count delivered frames only, so where frames were skipped the
+  real tail is worse than the p99 shown.
 - **Not covered:** an RT setup (PREEMPT_RT, isolated cores, SCHED_FIFO), which is what these tails
   call for; GPU payloads; other RMWs.
 

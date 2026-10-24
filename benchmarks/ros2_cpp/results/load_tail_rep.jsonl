@@ -1,4 +1,4 @@
-{"meta": "load_tail", "date": "2026-10-24T21:44:49+09:00", "cpus_online": "0-1,5-9,13-15", "kernel": "7.0.0-38-generic", "frames": 3000, "rate_hz": 100, "nbuf": 4, "pub_cpus": "6,14", "sub_cpus": "7,15"}
+{"meta": "load_tail", "date": "2026-10-24T21:44:49+09:00", "cpus_online": "0-1,5-9,13-15", "kernel": "7.0.0-38-generic", "frames": 3000, "rate_hz": 100, "nbuf": 4, "pub_cpus": "6,14", "sub_cpus": "7,15", "reps": 2, "stress_ng": "0.17.06"}
 {"rep": 1, "load": "idle", "transport": "axon", "bytes": 1048576, "pinned": true, "p50_us": 23.4, "p90_us": 35.1, "p99_us": 65.1, "max_us": 6346.1, "frames_seen": 2999, "torn": 0}
 {"rep": 1, "load": "idle", "transport": "ros_loan", "bytes": 1048576, "pinned": true, "p50_us": 34.9, "p90_us": 48.7, "p99_us": 1010.2, "max_us": 9017.4, "frames_seen": 3000, "torn": 0}
 {"rep": 1, "load": "idle", "transport": "iox2", "bytes": 1048576, "pinned": true, "p50_us": 20.1, "p90_us": 23.2, "p99_us": 28.8, "max_us": 56.9, "frames_seen": 3000, "torn": 0}

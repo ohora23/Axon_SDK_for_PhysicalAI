@@ -4,8 +4,8 @@
 # Usage: run_load_tail.sh [reps=2]  ->  results/load_tail_rep.jsonl (OUT overrides)
 # Pinned conditions give each process a whole physical core: producer CPUs 6,14 and consumer
 # CPUs 7,15 (SMT siblings on this PC). A ROS 2 process runs executor and DDS threads besides the
-# polling one; squeezed onto one logical CPU they wait behind it (603 us p50 at 1 MiB, idle), which
-# would compare the pinning, not the transport. Load never runs on those four CPUs, and both
+# polling one; squeezed onto one logical CPU they wait behind it (603 us p50 at 1 MiB, idle, in a
+# 200-frame trial run that is not in the results), which would compare the pinning, not the transport. Load never runs on those four CPUs, and both
 # producer CPUs hold a 0 us wake-up limit (no clock drop) while pinned.
 
 
@@ -71,43 +71,41 @@ done
 # --- Cleanup trap -------------------------------------------------------------
 STRESS_PIDS=()
 CONSUMPID=0
+PRODPID=0
 
+# One cleanup for every way out (normal end, error exit, Ctrl-C, TERM, HUP): stress-ng, the
+# producer and consumer of the current cell, and the wake-up limits.
 cleanup() {
-  for pid in "${STRESS_PIDS[@]}"; do
-    kill "$pid" 2>/dev/null || true
-  done
-  for pid in "${STRESS_PIDS[@]}"; do
-    wait "$pid" 2>/dev/null || true
-  done
-  [ "$CONSUMPID" -gt 0 ] && kill "$CONSUMPID" 2>/dev/null || true
-  [ "$CONSUMPID" -gt 0 ] && wait "$CONSUMPID" 2>/dev/null || true
+  for pid in "${STRESS_PIDS[@]}" "$CONSUMPID" "$PRODPID"; do [ "$pid" != 0 ] && kill "$pid" 2>/dev/null; done
+  for pid in "${STRESS_PIDS[@]}" "$CONSUMPID" "$PRODPID"; do [ "$pid" != 0 ] && wait "$pid" 2>/dev/null; done
   for Q in "${QS[@]}"; do echo 0 > "$Q" 2>/dev/null; done
-  exit 130
 }
-
-trap cleanup INT TERM
-
-trap 'for Q in "${QS[@]}"; do echo 0 > "$Q" 2>/dev/null; done' EXIT
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+# Safety net if this shell is SIGKILLed: stress-ng stops on its own after the whole run's length.
+STRESS_TIMEOUT=$(( (FRAMES / HZ + 15) * 6 * 4 * ${1:-2} ))s
 
 # --- Helper: start/stop stress for a condition --------------------------------
 start_stress_cpu() {
   for c in "${OTHERS[@]}"; do
-    stress-ng --cpu 1 --taskset "$c" --quiet &
+    stress-ng --cpu 1 --taskset "$c" --timeout "$STRESS_TIMEOUT" --quiet &
     STRESS_PIDS+=($!)
   done
 }
 
 start_stress_cpu_unpinned() {
   for c in "${ALL_CPUS[@]}"; do
-    stress-ng --cpu 1 --taskset "$c" --quiet &
+    stress-ng --cpu 1 --taskset "$c" --timeout "$STRESS_TIMEOUT" --quiet &
     STRESS_PIDS+=($!)
   done
 }
 
 start_stress_mem() {
-  stress-ng --stream 1 --taskset 0 --quiet &
+  stress-ng --stream 1 --taskset 0 --timeout "$STRESS_TIMEOUT" --quiet &
   STRESS_PIDS+=($!)
-  stress-ng --stream 1 --taskset 1 --quiet &
+  stress-ng --stream 1 --taskset 1 --timeout "$STRESS_TIMEOUT" --quiet &
   STRESS_PIDS+=($!)
 }
 
@@ -122,7 +120,8 @@ stop_stress() {
 }
 
 # --- Write meta line (overwrite) ----------------------------------------------
-python3 -I - "$CPUS_ONLINE" "$KERNEL" "$FRAMES" "$HZ" <<'PY' > "$OUT"
+# Written to $OUT.tmp and moved into place at the end, so a failed run leaves $OUT as it was.
+python3 -I - "$CPUS_ONLINE" "$KERNEL" "$FRAMES" "$HZ" "$AXON_BENCH_NBUF" "$PUB_CPUS" "$SUB_CPUS" "${1:-2}" "$(stress-ng --version | awk '{print $3}')" <<'PY' > "$OUT.tmp"
 import sys, subprocess
 cpus_online = sys.argv[1]
 kernel = sys.argv[2]
@@ -137,8 +136,8 @@ obj = {
     "kernel": kernel,
     "frames": frames,
     "rate_hz": hz,
-    "nbuf": 4,
-    "pub_cpus": "6,14", "sub_cpus": "7,15"
+    "nbuf": int(sys.argv[5]),
+    "pub_cpus": sys.argv[6], "sub_cpus": sys.argv[7], "reps": int(sys.argv[8]), "stress_ng": sys.argv[9],
 }
 print(json.dumps(obj))
 PY
@@ -190,7 +189,7 @@ for rep in $(seq 1 "$REPS"); do
         fi
 
         # Apply taskset for pinned conditions
-        if [ "$PINNED" = true ] && [ "$load" != "cpu_unpinned" ]; then
+        if [ "$PINNED" = true ]; then
           SUB=(taskset -c "$SUB_CPUS" "${SUB[@]}")
           PUB=(taskset -c "$PUB_CPUS" "${PUB[@]}")
         fi
@@ -201,13 +200,15 @@ for rep in $(seq 1 "$REPS"); do
 
         sleep 1
 
-        "${PUB[@]}" > "$T/c.pub" 2>> "$T/c.err"
+        "${PUB[@]}" > "$T/c.pub" 2>> "$T/c.err" &
+        PRODPID=$!
+        wait "$PRODPID"
         PEXIT=$?
+        PRODPID=0
 
         if [ "$PEXIT" -ne 0 ]; then
           echo "producer failed: $load $tr $b" >&2
           cat "$T/c.err" >&2
-          stop_stress
           exit 1
         fi
 
@@ -218,12 +219,11 @@ for rep in $(seq 1 "$REPS"); do
         if [ "$CWAIT" -ne 0 ]; then
           echo "consumer failed: $load $tr $b (exit $CWAIT)" >&2
           cat "$T/c.err" >&2
-          stop_stress
           exit 1
         fi
 
         # Append enriched JSON line
-        python3 -I - "$T/c.sub" "$rep" "$load" "$tr" "$b" "$PINNED" <<'PY' >> "$OUT"
+        python3 -I - "$T/c.sub" "$rep" "$load" "$tr" "$b" "$PINNED" <<'PY' >> "$OUT.tmp"
 import sys, json
 
 csub_path = sys.argv[1]
@@ -275,4 +275,5 @@ PY
   done
 done
 
+mv "$OUT.tmp" "$OUT"
 echo "[done] $OUT"

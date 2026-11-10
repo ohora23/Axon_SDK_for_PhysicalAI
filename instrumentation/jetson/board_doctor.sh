@@ -1,320 +1,183 @@
 #!/usr/bin/env bash
-# board_doctor.sh — Read-only Jetson board health check (L4T r35, extlinux boot)
+# board_doctor.sh: read-only health check for a Jetson board (L4T r35, extlinux boot).
+# Run it before and after changing the boot config, after `apt upgrade`, and after the board
+# was unreachable. One line per check, `PASS|WARN|FAIL|INFO <check>: <detail>`; exit 1 on FAIL.
 #
-# Checks:
-#   1 boot-source       Running kernel vs every ext4 candidate's boot/Image
-#   2 boot-default      DEFAULT label and LINUX path on the boot partition
-#   3 kernel-vs-rootfs  /boot/Image on root fs vs boot partition
-#   4 modules            /lib/modules/<running kernel> exists
-#   5 nic-binding       NM ethernet connections bound by MAC, not name
-#   6 recent-boots       Last 6 boot IDs with kernel version and timestamp
-#   7 pstore             /sys/fs/pstore files
-#   8 apt-hold           nvidia-l4t-kernel held when root fs ≠ boot partition
-#   9 rt                 Real-time / isolation / nvpmodel hints
+#   boot-source       which partition holds the running kernel (every boot/Image* on every ext4
+#                     partition; several holding it are told apart by whose DEFAULT boots it)
+#   boot-default      that partition's DEFAULT entry, and whether the root fs has its own extlinux
+#   kernel-vs-rootfs  the DEFAULT image on the root fs /boot vs the boot partition's
+#   modules           /lib/modules/$(uname -r)
+#   nic-binding       NetworkManager ethernet profiles bound by name instead of MAC
+#   recent-boots      kernel of the last 6 boots (the board clock may jump between boots)
+#   pstore            leftover panic/console dumps
+#   apt-hold          nvidia-l4t-kernel held when the boot partition is not the root fs
+#   rt                PREEMPT_RT, isolated CPUs, power mode
 #
-# Run as root for the boot-partition checks (it mounts candidates read-only);
-# as a user in group adm the journal checks work.
-# Usage: sudo instrumentation/jetson/board_doctor.sh
-
+# Root is needed for the boot-partition checks: it mounts each candidate with `-o ro,noload`
+# (noload: no journal replay, so nothing is written even after a crash). As a user in group adm
+# only the root fs and the journal are checked.
+#   usage: sudo instrumentation/jetson/board_doctor.sh
 set -u
 
-# ── helpers ────────────────────────────────────────────────────────────────
-is_root=0
-if [ "$(id -u)" = "0" ]; then
-    is_root=1
-fi
+rc=0
+report() { echo "$1 $2: $3"; [ "$1" = FAIL ] && rc=1; return 0; }
+is_root=0; [ "$(id -u)" = 0 ] && is_root=1
+RUN=$(uname -v)
 
-exit_code=0
-trap 'cleanup' EXIT
-
-TMPMNTS=()
-
+MNTS=()
 cleanup() {
-    for mp in "${TMPMNTS[@]+"${TMPMNTS[@]}"}"; do
-        if mountpoint -q "$mp" 2>/dev/null; then
-            umount "$mp" 2>/dev/null || true
-        fi
-        rmdir "$mp" 2>/dev/null || true
+    for m in "${MNTS[@]+"${MNTS[@]}"}"; do
+        if mountpoint -q "$m"; then umount "$m" || echo "WARN cleanup: $m is still mounted" >&2; fi
+        rmdir "$m" 2>/dev/null
     done
 }
+trap cleanup EXIT
 
-report() {
-    echo "$1 $2: $3"
-    if [ "$1" = "FAIL" ]; then
-        exit_code=1
-    fi
-}
+kver() { grep -a -m1 -o 'Linux version [[:print:]]*' "$1" 2>/dev/null; }   # no binutils needed
+runs() { kver "$1" | grep -Fq "$RUN"; }
+# extlinux: case-insensitive keywords, CRLF tolerated, comments ignored
+xl_default() { awk '{sub(/\r$/,"")} toupper($1)=="DEFAULT"{print $2; exit}' "$1"; }
+xl_linux() { awk -v l="$2" '{sub(/\r$/,"")} toupper($1)=="LABEL"{s=($2==l)} s && toupper($1)=="LINUX"{print $2; exit}' "$1"; }
 
-# ── 1. boot-source ─────────────────────────────────────────────────────────
-RUN="$(uname -v)"
-
-# Collect candidates: / plus every ext4 partition not mounted at /
-declare -a CAND_DEVICES=()
-declare -a CAND_PARTITIONS=()
-declare -a CAND_MOUNTS=()
-
-add_candidate() {
-    local dev="$1"
-    local part="$2"
-    local mp="$3"
-    CAND_DEVICES+=("$dev")
-    CAND_PARTITIONS+=("$part")
-    CAND_MOUNTS+=("$mp")
-}
-
-add_candidate "/" "" "/"
-
-if [ "$is_root" = "1" ]; then
-    while read -r part fstype mpoint; do
-        if [ "$fstype" = "ext4" ]; then
-            local_mp="$(mktemp -d)"
-            mount -o ro "$part" "$local_mp" 2>/dev/null && {
-                add_candidate "$part" "$part" "$local_mp"
-                TMPMNTS+=("$local_mp")
-            } || {
-                rmdir "$local_mp" 2>/dev/null || true
-            }
+# ── candidates: the root fs, plus (root only) every other ext4 partition, mounted ro,noload ──
+NAMES=("/"); ROOTS=("")
+mount_failed=0
+if [ "$is_root" = 1 ]; then
+    while read -r part; do
+        d=$(mktemp -d); MNTS+=("$d")
+        if mount -t ext4 -o ro,noload "$part" "$d" 2>/dev/null; then
+            NAMES+=("$part"); ROOTS+=("$d")
+        else
+            report WARN boot-source-candidate "$part: mount failed"; mount_failed=1
         fi
-    done < <(lsblk -rpno NAME,FSTYPE,MOUNTPOINT 2>/dev/null | awk '$2 == "ext4" && $3 != "/" {print $1, $2, $3}')
+    done < <(lsblk -rpno NAME,FSTYPE,MOUNTPOINT | awk '$2=="ext4" && $3!="/" {print $1}')
 fi
 
-match_count=0
-default_hits=0
-boot_mp=""
-boot_dev=""
-boot_conf=""
-boot_default=""
-boot_matched=0
-
-for i in "${!CAND_DEVICES[@]}"; do
-    dev="${CAND_DEVICES[$i]}"
-    mp="${CAND_MOUNTS[$i]}"
-
-    img_path=""
-    conf_path=""
-
-    if [ "$dev" = "/" ]; then
-        img_path="/boot/Image"
-        conf_path="/boot/extlinux/extlinux.conf"
-    else
-        img_path="$mp/boot/Image"
-        conf_path="$mp/boot/extlinux/extlinux.conf"
+# ── 1. boot-source ──
+hits=0; dhits=0; bi=-1
+for i in "${!NAMES[@]}"; do
+    r=${ROOTS[$i]}; conf="$r/boot/extlinux/extlinux.conf"
+    label="(none)"; dimg=""
+    if [ -f "$conf" ]; then
+        label=$(xl_default "$conf"); label=${label:-"(none)"}
+        dl=$(xl_linux "$conf" "$label"); [ -n "$dl" ] && dimg="$r$dl"
     fi
-
-    label="(none)"
-    if [ -f "$conf_path" ]; then
-        conf_path="$(readlink -f "$conf_path" 2>/dev/null || echo "$conf_path")"
-        label="$(awk '$1=="DEFAULT"{print $2; exit}' "$conf_path" 2>/dev/null)"
-    fi
-
-    # Every kernel image on the partition (Image, Image.rt, Image.bak-*), not only boot/Image:
-    # the running kernel may be any extlinux entry.
-    default_runs="no"
-    if [ -f "$conf_path" ] && [ -n "$label" ]; then
-        dl="$(awk -v l="$label" '$1=="LABEL"{sel=($2==l)} sel && $1=="LINUX"{print $2; exit}' "$conf_path" 2>/dev/null)"
-        if [ -n "$dl" ]; then
-            [ "$dev" = "/" ] && dimg="$dl" || dimg="$mp$dl"
-            [ -f "$dimg" ] && strings "$dimg" 2>/dev/null | grep -m1 'Linux version' | grep -Fq "$RUN" && default_runs="yes"
-        fi
-    fi
-    matched="no"
-    for img in "${img_path%/Image}"/Image*; do
+    held=""
+    for img in "$r"/boot/Image*; do
         case "$img" in *.sig) continue ;; esac
-        [ -f "$img" ] || continue
-        ver_line="$(strings "$img" 2>/dev/null | grep -m1 'Linux version' || true)"
-        if echo "$ver_line" | grep -Fq "$RUN"; then
-            matched="yes (${img##*/})"
-            match_count=$((match_count + 1))
-            # several partitions can hold the same image; prefer the one whose DEFAULT boots it
-            if [ "$boot_matched" = 0 ] || [ "$default_runs" = yes ]; then
-                boot_dev="$dev"; boot_conf="$conf_path"; boot_default="$label"; boot_mp="$mp"
-                [ "$default_runs" = yes ] && default_hits=$((default_hits + 1))
-            fi
-            boot_matched=1
-            break
-        fi
+        [ -f "$img" ] && runs "$img" && { held=${img##*/}; break; }
     done
-
-    if [ "$dev" = "/" ]; then
-        dev_display="root fs (/)"
-    else
-        dev_display="$dev"
+    druns=no; [ -n "$dimg" ] && [ -f "$dimg" ] && runs "$dimg" && druns=yes
+    report INFO boot-source-candidate "${NAMES[$i]} DEFAULT=$label holds_running=${held:-no} default_boots_it=$druns"
+    if [ -n "$held" ]; then
+        hits=$((hits + 1))
+        if [ "$druns" = yes ]; then dhits=$((dhits + 1)); bi=$i; elif [ "$bi" -lt 0 ]; then bi=$i; fi
     fi
-
-    report "INFO" "boot-source-candidate" "$dev_display DEFAULT=$label image_matches=$matched default_is_running=$default_runs"
 done
 
-if [ "$match_count" -eq 1 ]; then
-    report "PASS" "boot-source" "boot partition is $boot_dev (running kernel found)"
-elif [ "$match_count" -eq 0 ]; then
-    if [ "$is_root" = "1" ]; then
-        report "FAIL" "boot-source" "running kernel not found in any /boot/Image*: the firmware boots something this script cannot see, or the image changed since boot"
+known=0
+if [ "$is_root" = 0 ]; then
+    report WARN boot-source "only the root fs was checked (run with sudo to check the other partitions)"
+elif [ "$mount_failed" = 1 ]; then
+    report WARN boot-source "a candidate failed to mount; the boot partition may be among them"
+elif [ "$hits" = 0 ]; then
+    report FAIL boot-source "running kernel is in no boot/Image*: the firmware boots something not checked here, or the image changed since boot"
+elif [ "$hits" = 1 ] || [ "$dhits" = 1 ]; then
+    report PASS boot-source "boot partition is ${NAMES[$bi]}"; known=1
+else
+    report WARN boot-source "$hits partitions hold the running kernel and $dhits boot it by DEFAULT: ambiguous"
+fi
+
+if [ "$known" = 1 ]; then
+    B=${ROOTS[$bi]}; conf="$B/boot/extlinux/extlinux.conf"
+    # ── 2. boot-default ──
+    if [ -f "$conf" ]; then
+        label=$(xl_default "$conf"); dl=$(xl_linux "$conf" "${label:-}")
+        report INFO boot-default "DEFAULT=${label:-(none)} LINUX=${dl:-(not found)}"
+        if [ -n "$dl" ] && ! runs "$B$dl"; then
+            report WARN boot-default "the DEFAULT entry boots a different kernel than the one running now"
+        fi
+    fi
+    if [ -n "$B" ] && [ -f /boot/extlinux/extlinux.conf ]; then
+        report WARN boot-default "the root fs has its own /boot/extlinux; edits there are not read at boot"
+    fi
+    # ── 3. kernel-vs-rootfs ──
+    if [ -n "$B" ]; then
+        dl=$(xl_linux "$conf" "$(xl_default "$conf")")
+        if [ -z "$dl" ] || [ ! -f "/$dl" ] || [ ! -f "$B$dl" ]; then
+            report INFO kernel-vs-rootfs "DEFAULT image missing on one side (${dl:-none})"
+        elif cmp -s "/$dl" "$B$dl"; then
+            report PASS kernel-vs-rootfs "$dl is the same on the root fs and the boot partition"
+        else
+            report WARN kernel-vs-rootfs "$dl differs: root fs $(kver "/$dl" | cut -c15-60) / boot partition $(kver "$B$dl" | cut -c15-60)"
+        fi
     else
-        report "WARN" "boot-source" "running kernel not found in any /boot/Image (not root — consider sudo)"
+        report INFO kernel-vs-rootfs "the root fs is the boot partition"
     fi
-elif [ "$default_hits" -eq 1 ]; then
-    report "PASS" "boot-source" "boot partition is $boot_dev ($match_count partitions hold the running kernel; only its DEFAULT entry boots it)"
-else
-    report "WARN" "boot-source" "$match_count candidates hold the running kernel and $default_hits of them boot it by DEFAULT: ambiguous"
-fi
-
-# ── 2. boot-default ────────────────────────────────────────────────────────
-if [ -n "$boot_conf" ] && [ -f "$boot_conf" ]; then
-    linux_path="$(awk -v l="$boot_default" '$1=="LABEL"{sel=($2==l)} sel && $1=="LINUX"{print $2; exit}' "$boot_conf" 2>/dev/null || true)"
-
-    if [ -z "$linux_path" ]; then
-        linux_path="(not found)"
-    fi
-
-    report "INFO" "boot-default" "DEFAULT=$boot_default LINUX=$linux_path"
-
-    # Check if DEFAULT entry's image differs from the one that matched
-    if [ -f "$boot_conf" ] && [ -n "$boot_default" ] && [ "$boot_default" != "(none)" ]; then
-        if [ -n "$linux_path" ] && [ "$linux_path" != "(not found)" ]; then
-            if [ -n "$boot_mp" ]; then
-                matched_image="$boot_mp$linux_path"
-            else
-                matched_image="$linux_path"
-            fi
-            if [ -f "$matched_image" ]; then
-                default_ver="$(strings "$matched_image" 2>/dev/null | grep -m1 'Linux version' || true)"
-                if ! echo "$default_ver" | grep -Fq "$RUN"; then
-                    report "WARN" "boot-default" "DEFAULT entry image differs from running kernel (next boot will run a different kernel)"
-                fi
-            fi
+    # ── 8. apt-hold ── (reported here, needs the boot partition)
+    if [ -n "$B" ]; then
+        if apt-mark showhold 2>/dev/null | grep -qx nvidia-l4t-kernel; then
+            report PASS apt-hold "nvidia-l4t-kernel is held"
+        else
+            report WARN apt-hold "nvidia-l4t-kernel is not held: apt writes the root fs /boot, not the boot partition"
         fi
     fi
 else
-    report "INFO" "boot-default" "no extlinux.conf on boot partition"
+    report INFO boot-default "boot partition unknown, skipped (also kernel-vs-rootfs, apt-hold)"
 fi
 
-# Warn if root fs has its own boot and is not the boot partition
-if [ "$boot_dev" != "/" ] && [ -f "/boot/extlinux/extlinux.conf" ]; then
-    report "WARN" "boot-default" "root fs has its own boot/extlinux — edits to /boot/extlinux on the root fs are not read at boot"
-fi
-
-# ── 3. kernel-vs-rootfs ────────────────────────────────────────────────────
-if [ "$boot_dev" != "/" ]; then
-    root_img="/boot/Image"
-    if [ -f "$root_img" ] && [ -n "$boot_conf" ] && [ -f "$boot_conf" ]; then
-        # Resolve boot partition mount
-        boot_img=""
-        for ci in "${!CAND_DEVICES[@]}"; do
-            if [ "${CAND_DEVICES[$ci]}" = "$boot_dev" ]; then
-                boot_img="${CAND_MOUNTS[$ci]}/boot/Image"
-                break
-            fi
-        done
-        if [ -n "$boot_img" ] && [ -f "$boot_img" ]; then
-            if cmp -s "$root_img" "$boot_img"; then
-                report "PASS" "kernel-vs-rootfs" "boot/Image on root fs matches boot partition"
-            else
-                report "WARN" "kernel-vs-rootfs" "apt updated /boot on the root fs only; the booted kernel is older than /lib/modules"
-            fi
-        fi
-    fi
-else
-    report "INFO" "kernel-vs-rootfs" "root fs is the boot partition — skip"
-fi
-
-# ── 4. modules ─────────────────────────────────────────────────────────────
+# ── 4. modules ──
 if [ -d "/lib/modules/$(uname -r)" ]; then
-    report "PASS" "modules" "/lib/modules/$(uname -r) exists"
+    report PASS modules "/lib/modules/$(uname -r)"
 else
-    report "FAIL" "modules" "/lib/modules/$(uname -r) missing"
+    report FAIL modules "/lib/modules/$(uname -r) missing"
 fi
 
-# ── 5. nic-binding ─────────────────────────────────────────────────────────
-if ! command -v nmcli >/dev/null 2>&1; then
-    report "INFO" "nic-binding" "nmcli not found — skipping"
-else
-    eth_count="$(nmcli -t -f DEVICE,TYPE dev 2>/dev/null | grep -c ':ethernet$' || echo 0)"
-    if [ "$eth_count" -lt 2 ]; then
-        report "PASS" "nic-binding" "$eth_count ethernet device(s) found (need 2+ to check)"
+# ── 5. nic-binding ──
+if command -v nmcli >/dev/null; then
+    n_eth=$(nmcli -t -f DEVICE,TYPE dev 2>/dev/null | grep -c ':ethernet$'); n_eth=${n_eth:-0}
+    by_name=0
+    while IFS=: read -r uuid type; do
+        [ "$type" = 802-3-ethernet ] || continue
+        name=$(nmcli -e no -g connection.id con show uuid "$uuid")
+        iface=$(nmcli -e no -g connection.interface-name con show uuid "$uuid")
+        mac=$(nmcli -e no -g 802-3-ethernet.mac-address con show uuid "$uuid")
+        report INFO nic-binding "'$name' interface=${iface:--} mac=${mac:--}"
+        [ -n "$iface" ] && [ -z "$mac" ] && by_name=1
+    done < <(nmcli -t -f UUID,TYPE con show 2>/dev/null)
+    if [ "$by_name" = 1 ] && [ "$n_eth" -ge 2 ]; then
+        report WARN nic-binding "$n_eth ethernet devices and a profile bound by name: eth0/eth1 can swap between boots; bind it by MAC"
     else
-        found_name_only=0
-        while IFS=: read -r cn ct; do
-            [ "$ct" = "802-3-ethernet" ] || continue
-            iface="$(nmcli -g connection.interface-name con show "$cn" 2>/dev/null || true)"
-            mac="$(nmcli -g 802-3-ethernet.mac-address con show "$cn" 2>/dev/null || true)"
-            report "INFO" "nic-binding" "$cn iface=$iface mac=$mac"
-            if [ -n "$iface" ] && [ -z "$mac" ]; then
-                found_name_only=1
-            fi
-        done < <(nmcli -t -f NAME,TYPE con show 2>/dev/null)
-
-        if [ "$found_name_only" -eq 1 ]; then
-            report "WARN" "nic-binding" "bound by name: eth0/eth1 can swap between boots; bind by MAC"
-        else
-            report "PASS" "nic-binding" "all ethernet connections have MAC addresses or no interface-name constraint"
-        fi
-    fi
-fi
-
-# ── 6. recent-boots ────────────────────────────────────────────────────────
-boot_ids="$(journalctl -F _BOOT_ID 2>/dev/null || true)"
-if [ -n "$boot_ids" ]; then
-    count=0
-    while IFS= read -r bid; do
-        if [ "$count" -ge 6 ]; then
-            break
-        fi
-        first_line="$(journalctl -q -b "$bid" -k -o short-iso --no-pager 2>/dev/null | grep -m1 'Linux version' || true)"
-        if [ -n "$first_line" ]; then
-            kernel_token="$(echo "$first_line" | awk '{for(i=1;i<=NF;i++){if($i ~ /^Linux$/ && $(i+1) == "version"){print $(i+2);exit}}}' || true)"
-            ts="$(echo "$first_line" | awk '{print $1, $2}' || true)"
-            report "INFO" "recent-boots" "$bid $kernel_token $ts (clock may jump between boots; order not reliable)"
-        else
-            report "INFO" "recent-boots" "$bid (no kernel message found)"
-        fi
-        count=$((count + 1))
-    done <<< "$boot_ids"
-else
-    report "WARN" "recent-boots" "no system journal access (run as root or add the user to group adm)"
-fi
-
-# ── 7. pstore ──────────────────────────────────────────────────────────────
-if [ -d "/sys/fs/pstore" ] && [ "$(ls -A /sys/fs/pstore 2>/dev/null)" ]; then
-    pstore_detail=""
-    for f in /sys/fs/pstore/*; do
-        if [ -e "$f" ]; then
-            fname="$(basename "$f")"
-            fsize="$(stat -c%s "$f" 2>/dev/null || echo '?')"
-            fmtime="$(stat -c%y "$f" 2>/dev/null | cut -d. -f1 || echo '?')"
-            pstore_detail="${pstore_detail}${fname}(${fsize},${fmtime} ) "
-        fi
-    done
-    report "INFO" "pstore" "$pstore_detail"
-else
-    report "INFO" "pstore" "pstore not readable (root only)"
-fi
-
-# ── 8. apt-hold ────────────────────────────────────────────────────────────
-if [ "$boot_dev" != "/" ]; then
-    held="$(apt-mark showhold 2>/dev/null | grep 'nvidia-l4t-kernel' || true)"
-    if [ -z "$held" ]; then
-        report "WARN" "apt-hold" "apt kernel upgrades write the root fs /boot, not the boot partition"
-    else
-        report "PASS" "apt-hold" "nvidia-l4t-kernel is held"
+        report PASS nic-binding "$n_eth ethernet device(s); no name-bound profile at risk"
     fi
 else
-    report "INFO" "apt-hold" "root fs is the boot partition — skip"
+    report INFO nic-binding "nmcli not found"
 fi
 
-# ── 9. rt ──────────────────────────────────────────────────────────────────
-rt_detail=""
-if [ -f "/sys/kernel/realtime" ]; then
-    rt_val="$(cat /sys/kernel/realtime 2>/dev/null || echo '?')"
-    rt_detail="realtime=$rt_val "
+# ── 6. recent-boots ──
+boots=$(journalctl --list-boots --no-pager 2>/dev/null | tail -n 6)
+if [ -n "$boots" ] && [ "$(journalctl -q -b 0 -k -n 1 --no-pager 2>/dev/null | wc -l)" -gt 0 ]; then
+    while read -r off _; do
+        k=$(journalctl -q -b "$off" -k --no-pager 2>/dev/null | grep -m1 -o 'Linux version [^ ]*' | cut -d' ' -f3)
+        report INFO recent-boots "boot $off: ${k:-no kernel log}"
+    done <<< "$boots"
+    report INFO recent-boots "order is by first timestamp; the board clock can jump between boots"
+else
+    report WARN recent-boots "no system journal access (run as root or add the user to group adm)"
 fi
-if [ -f "/sys/devices/system/cpu/isolated" ]; then
-    iso_val="$(cat /sys/devices/system/cpu/isolated 2>/dev/null || echo '?')"
-    rt_detail="${rt_detail}isolated=$iso_val "
-fi
-nvp="$(nvpmodel -q 2>/dev/null | head -1 || true)"
-if [ -n "$nvp" ]; then
-    rt_detail="${rt_detail}nvpmodel=$nvp"
-fi
-report "INFO" "rt" "${rt_detail:-no real-time indicators found}"
 
-exit "$exit_code"
+# ── 7. pstore ──
+if [ ! -r /sys/fs/pstore ] || [ ! -x /sys/fs/pstore ]; then
+    report INFO pstore "not readable (root only)"
+elif [ -z "$(ls -A /sys/fs/pstore)" ]; then
+    report PASS pstore "empty"
+else
+    report WARN pstore "dumps from an earlier boot: $(cd /sys/fs/pstore && ls -l --time-style=+%F_%T | awk 'NR>1{printf "%s(%s %s) ", $NF, $5, $6}')"
+fi
+
+# ── 9. rt ──
+rt="realtime=$(cat /sys/kernel/realtime 2>/dev/null || echo 0) isolated=$(cat /sys/devices/system/cpu/isolated 2>/dev/null)"
+report INFO rt "$rt power=$(nvpmodel -q 2>/dev/null | head -1 | sed 's/^NV Power Mode: //')"
+
+exit "$rc"

@@ -21,7 +21,7 @@ so verification never freezes the desktop. Tooling lives in
 | 4 | memory/cache | ROS2 spends **8.6× the cache-misses** copying payloads; axon doesn't | perf (paranoid≤1) | ✅ |
 | 5 | eBPF copy | direct `copy_to_user` byte count | sudo | tool |
 | 6 | Jetson NvBufSurface | **camera → CUDA with no copy** across processes on a real Jetson + UVC camera | none | ✅ |
-| 7 | 1 kHz RT jitter | `cyclictest` worst case on the Jetson — stock-kernel baseline measured; PREEMPT_RT run pending | sudo (once) | 🟡 |
+| 7 | 1 kHz RT jitter | `cyclictest` worst case on the Jetson: PREEMPT_RT + isolated CPUs 133 / 226 µs (idle / load) at 30 W, 74 / 148 µs at MAXN; RT alone keeps 1.1-1.2 ms spikes | sudo (once) | 🟡 |
 
 ## 0. Resource harness (freeze protection)
 
@@ -188,31 +188,76 @@ rejects index 0 until it is set to 1; JetPack 5 ships cmake 3.16 (axon needs ≥
 ## 7. 1 kHz RT jitter on the Jetson (AGX Xavier) 🟡
 
 Target: worst-case wake-up jitter **< 100 µs** for a 1 kHz control loop. Same board as §6.
-Scripts: [`instrumentation/jetson/rt/`](../instrumentation/jetson/rt/).
+Scripts: [`instrumentation/jetson/rt/`](../instrumentation/jetson/rt/); raw `cyclictest`
+output, environment dumps and trace excerpts in [`results/`](../instrumentation/jetson/rt/results/).
 
-```bash
-instrumentation/jetson/rt/run_jitter.sh baseline 300   # on the board: idle, then stress-ng
-```
+`cyclictest -m -p 95 -a -i 1000` (SCHED_FIFO 95, `mlockall`, 1 ms period, one thread per
+measured CPU), 5 min idle, then 5 min under `stress-ng --io 2 --vm 2 --vm-bytes 512M` plus
+`--cpu 8` (all CPUs) or `--cpu 4` (isolated runs, where the scheduler keeps it on CPUs 0-3).
 
-`cyclictest -m -p 95 -t -a -i 1000` (SCHED_FIFO 95, `mlockall`, one thread per CPU,
-1 ms period), 5 min idle and 5 min under `stress-ng --cpu 8 --io 2 --vm 2`.
-nvpmodel `MODE_30W_ALL`, governor `schedutil`.
+| Kernel and setup | CPUs measured | Avg | Worst idle / load | Samples > 1 ms, idle | Samples > 1 ms, load |
+|---|---|---|---|---|---|
+| stock `5.10.216-tegra` (`CONFIG_PREEMPT`), 30 W | 0-7 | 34-61 µs | 1,138 / 1,263 µs | 1 / 2.4 M | 177 / 2.4 M |
+| PREEMPT_RT `5.10.216-rt108-tegra`, 30 W | 0-7 | 34-60 µs | 1,145 / 1,229 µs | 1 / 2.4 M | 116 / 2.4 M |
+| PREEMPT_RT, 30 W + `jetson_clocks` | 0-7 | 31-55 µs | 1,191 / 1,160 µs | 3 / 2.4 M | 75 / 2.4 M |
+| **PREEMPT_RT, 30 W, CPUs 4-7 isolated** | 4-7 | 34-37 µs | **133 / 226 µs** | 0 / 1.2 M | **0 / 1.2 M** |
+| PREEMPT_RT, MAXN + `jetson_clocks`, 4-7 isolated, RT throttling off | 4-7 | 15-17 µs | **74 / 148 µs** | 0 / 1.2 M | 0 / 1.2 M |
 
-**Baseline — stock kernel `5.10.216-tegra` (`CONFIG_PREEMPT`, not RT):**
+Isolation = `isolcpus=managed_irq,domain,4-7 irqaffinity=0-3 kthread_cpus=0-3` on the RT
+kernel's extlinux entry. 30 W = `MODE_30W_ALL` (CPUs at 1.19 GHz); MAXN runs them at 2.27 GHz
+with EMC at 2,133 MHz. One run per row.
 
-| Condition | Avg (per CPU) | Worst | Samples > 1 ms |
-|---|---|---|---|
-| idle | 34–38 µs | **1,138 µs** | 1 / 2.4 M |
-| stress-ng load | 57–61 µs | **1,263 µs** | 177 / 2.4 M |
+- **PREEMPT_RT alone does not remove the ~1.1-1.2 ms spikes.** Without isolation every CPU
+  still hits 1.1-1.3 ms under load, on the RT kernel as on the stock one, with or without
+  locked clocks (so not DVFS). The same size of spike also shows up idle, rarely (1-3 in
+  2.4 M samples, with no `stress-ng` running).
+- **Under load, isolating the RT CPUs removes them.** At the same power mode and clocks
+  (30 W, no `jetson_clocks`), the isolated CPUs stay at or under 226 µs under load with no
+  sample over 1 ms in 1.2 M, where the non-isolated runs' rate (75-177 in 2.4 M) would predict
+  about 37-88. The isolated runs put a lighter load on the machine (`--cpu 4` on four CPUs
+  against `--cpu 8` on eight), so part of the drop may be the load. Idle, the spike was too
+  rare to tell (0 in 1.2 M against 1-3 in 2.4 M); a longer isolated idle run would settle it.
+  MAXN with locked clocks halves the average and brings the worst to 148 µs under load and
+  74 µs idle. The < 100 µs target is met idle at MAXN, not yet under this load.
+- **What the trace shows** (`trace_break.sh`: `cyclictest -b 1000` stops ftrace at the first
+  sample over 1 ms; sched, irq and IPI events only; under load). In the two saved captures
+  (`results/trace_excerpt_{3,4}.txt`; two earlier ones, 1,132 µs and 1,129 µs, were overwritten
+  before they were saved) the timer fired on time and `cyclictest` was switched in 9-15 µs
+  after its wakeup; the time went after that, 1.16-1.23 ms with no traced event on that CPU.
+  Both times it preempted the `stress-ng` I/O worker on that CPU, but the idle spikes show the
+  stall does not need that task. Its cause is outside the events traced here; the capture
+  threads ran at 1-4.5 ms periods (no `-d 0`), not all at 1 kHz.
+- **A comparison point:** a [PREEMPT_RT report on Jetson AGX Orin](https://www.wimcorp.co.kr/tech/posts/embedded/preempt-rt-jetson-orin/)
+  (NVIDIA's prebuilt RT kernel, MAXN + `jetson_clocks`) used the same isolation parameters and
+  reports 113-159 µs worst under GPU, storage or EtherCAT load without isolation and 6-15 µs
+  with it. The same step helps on both boards, but Orin shows no millisecond stall (47-56 µs
+  under `stress-ng` without isolation), and Xavier's isolated worst at MAXN (148 µs) is about
+  10× Orin's.
 
-The stock kernel misses the target by >10×, so the RT number needs a PREEMPT_RT kernel.
-NVIDIA publishes prebuilt RT kernels only for r36 (Orin); for Xavier on r35,
-`build-rt.sh` cross-builds one from the L4T r35.6.4 public sources with their bundled
-`rt-patches` (`5.10.216-rt108-tegra`, ~10 min on a 9800X3D), and `install-rt.sh` adds it as
-an extlinux entry next to the stock kernel. **Status:** the first boot of that kernel did
-not come back on the network (Tailscale and LAN both silent); diagnosis needs the board's
-console. The config diff against the stock kernel is only the RT switches — root-fs (NVMe,
-PCIe) and the USB-Ethernet (`r8152`) drivers are built in on both.
+For an axon RT loop on Xavier: boot the RT kernel with the CPUs isolated, pin the loop to one
+of them (`RtSetupConfig::cpu_id`), and keep camera, inference and storage work on the
+housekeeping CPUs.
+
+**Building and installing the RT kernel.** NVIDIA publishes prebuilt RT kernels only for r36
+(Orin); for Xavier on r35, `build-rt.sh` cross-builds one from the L4T r35.6.4 public sources
+with their bundled `rt-patches` (~10 min on a 9800X3D), and `install-rt.sh` adds it as an
+extlinux entry. **Install it on the partition the firmware boots.** This board boots
+`mmcblk0p1` (eMMC) and only mounts the NVMe as root (`root=/dev/nvme0n1p1`), so for three weeks
+the RT entry sat in the NVMe `/boot/extlinux/extlinux.conf`, which nothing read: every boot ran
+the stock kernel, and boots that did not come back on the network were blamed on the RT kernel.
+They were a NIC-naming race (next paragraph). `install-rt.sh` now takes `BOOT_PART=` and
+refuses when the running kernel is neither that partition's `/boot/Image` nor its `/boot/Image.rt`.
+That guard cannot tell two partitions apart while both hold the same stock `Image` (a root fs
+cloned from the boot partition), which is how this board started; `board_doctor.sh` breaks the
+tie by which partition's DEFAULT entry boots the running kernel. Check with
+`uname -v` against `strings /boot/Image | grep "Linux version"` on each candidate partition.
+`apt upgrade` of `nvidia-l4t-kernel` has the same blind spot: it rewrote the NVMe `/boot`
+(and reset `DEFAULT` to `primary` there) while the eMMC kernel stayed on the old release.
+
+**Two NICs.** NetworkManager profiles bound by interface name (`eth0` = on-board LAN to a
+second board, `eth1` = USB LAN to the network) swap when the USB adapter probes first, which
+happened on some boots: the USB LAN then gets the other board's static address and the board
+drops off the network. Bind the profiles to MAC addresses (`802-3-ethernet.mac-address`).
 
 Pitfall: the stock Jetson kernel has `CONFIG_RT_GROUP_SCHED=y` and systemd gives
 `user.slice` `cpu.rt_runtime_us = 0`, so SCHED_FIFO fails with `EPERM` **even with**

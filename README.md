@@ -163,7 +163,7 @@ Fast-RTPS on the same workload. Full detail: [docs/hardware-verification.md](doc
 | GPU zero-copy import | real hardware | **RTX 5080: 200/200 frames, 0 copies, 1.68 GB** ✅ |
 | Sensor → accelerator, no copy | real board + real sensor | **AGX Xavier + UVC webcam: host == CUDA view on 30/30 frames, staleness ~0.5 ms** ✅ |
 | Staleness bound | sum of 7 explicit terms | deterministic formula (§5) ✅ |
-| 1kHz RT worst-case jitter | < 100µs | stock Jetson kernel 1.26 ms (baseline); PREEMPT_RT run pending 🟡 |
+| 1kHz RT worst-case jitter | < 100µs | Jetson Xavier, PREEMPT_RT + isolated CPUs: 133 / 226 µs (idle / load) at 30 W, 74 / 148 µs at MAXN; RT without isolation keeps 1.1-1.2 ms spikes ([§7](docs/hardware-verification.md)) 🟡 |
 
 The formula:
 ```
@@ -443,7 +443,7 @@ Design → working library + measured results. Done (merged to `main`):
 
 Next:
 
-- [ ] `cyclictest` 1 kHz jitter on a PREEMPT_RT kernel (needs the target board)
+- [x] `cyclictest` 1 kHz jitter on a PREEMPT_RT kernel (Xavier, isolated CPUs: 133 / 226 µs at 30 W, 74 / 148 µs at MAXN; < 100 µs under load not yet met)
 - [ ] AMD XDNA backend + real robot integration
 
 ---

@@ -1,0 +1,14 @@
+WARN: cyclictest was not built with the numa option
+INFO: debugfs mountpoint: /sys/kernel/debug/tracing/
+# /dev/cpu_dma_latency set to 0us
+T: 0 (21503) P:95 I:1000 C:  11244 Min:     35 Act:   58 Avg:   68 Max:     273
+T: 1 (21504) P:95 I:1500 C:   7493 Min:     34 Act: 1125 Avg:   65 Max:    1125
+T: 2 (21505) P:95 I:2000 C:   5615 Min:     45 Act:   57 Avg:   64 Max:     209
+T: 3 (21506) P:95 I:2500 C:   4485 Min:     37 Act:   56 Avg:   65 Max:     327
+T: 4 (21507) P:95 I:3000 C:   3738 Min:     40 Act:   55 Avg:   73 Max:     374
+T: 5 (21508) P:95 I:3500 C:   3197 Min:     46 Act:   60 Avg:   70 Max:     248
+T: 6 (21509) P:95 I:4000 C:   2790 Min:     45 Act:   57 Avg:   66 Max:     219
+T: 7 (21510) P:95 I:4500 C:   2477 Min:     42 Act:  103 Avg:   67 Max:     370
+# Thread Ids: 21503 21504 21505 21506 21507 21508 21509 21510
+# Break thread: 21504
+# Break value: 1125

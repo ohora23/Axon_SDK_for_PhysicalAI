@@ -1,0 +1,5 @@
+Linux hermes-head 5.10.216-rt108-tegra #1 SMP PREEMPT RT Thu Oct 15 01:08:34 KST 2026 aarch64 aarch64 aarch64 GNU/Linux
+NV Power Mode: MODE_30W_ALL
+schedutil
+root=/dev/nvme0n1p1 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4 video=efifb:off 
+1

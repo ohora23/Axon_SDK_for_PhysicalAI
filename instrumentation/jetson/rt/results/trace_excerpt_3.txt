@@ -1,0 +1,9 @@
+   stress-ng-cpu-21457   [004] dnLh... 198620.424889: ipi_entry: (Rescheduling interrupts)
+   stress-ng-cpu-21457   [004] dnLh... 198620.424890: ipi_exit: (Rescheduling interrupts)
+   stress-ng-cpu-21457   [004] dnLh... 198620.424891: irq_handler_exit: irq=1 ret=handled
+   stress-ng-cpu-21457   [004] d...2.. 198620.424901: sched_switch: prev_comm=stress-ng-cpu prev_pid=21457 prev_prio=120 prev_state=R ==> next_comm=stress-ng-io next_pid=21461 next_prio=120
+    stress-ng-io-21461   [004] d..h... 198620.425259: irq_handler_entry: irq=13 name=arch_timer
+    stress-ng-io-21461   [004] dN.h3.. 198620.425273: sched_wakeup: comm=cyclictest pid=21476 prio=4 target_cpu=004
+    stress-ng-io-21461   [004] dN.h... 198620.425279: irq_handler_exit: irq=13 ret=handled
+    stress-ng-io-21461   [004] d...2.. 198620.425288: sched_switch: prev_comm=stress-ng-io prev_pid=21461 prev_prio=120 prev_state=R+ ==> next_comm=cyclictest next_pid=21476 next_prio=4
+      cyclictest-21476   [004] ....... 198620.426513: tracing_mark_write: hit latency threshold (1172 > 1000)

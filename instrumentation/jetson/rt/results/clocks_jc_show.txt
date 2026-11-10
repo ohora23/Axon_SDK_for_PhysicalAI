@@ -1,0 +1,25 @@
+SOC family:tegra194  Machine:Jetson-AGX
+Online CPUs: 0-7
+cpu0:  Online=1 Governor=schedutil MinFreq=1190400 MaxFreq=1190400 CurrentFreq=1190400 IdleStates: C1=0 c6=0 
+cpu1:  Online=1 Governor=schedutil MinFreq=1190400 MaxFreq=1190400 CurrentFreq=1190400 IdleStates: C1=0 c6=0 
+cpu2:  Online=1 Governor=schedutil MinFreq=1190400 MaxFreq=1190400 CurrentFreq=1190400 IdleStates: C1=0 c6=0 
+cpu3:  Online=1 Governor=schedutil MinFreq=1190400 MaxFreq=1190400 CurrentFreq=1190400 IdleStates: C1=0 c6=0 
+cpu4:  Online=1 Governor=schedutil MinFreq=1190400 MaxFreq=1190400 CurrentFreq=1190400 IdleStates: C1=0 c6=0 
+cpu5:  Online=1 Governor=schedutil MinFreq=1190400 MaxFreq=1190400 CurrentFreq=1190400 IdleStates: C1=0 c6=0 
+cpu6:  Online=1 Governor=schedutil MinFreq=1190400 MaxFreq=1190400 CurrentFreq=1190400 IdleStates: C1=0 c6=0 
+cpu7:  Online=1 Governor=schedutil MinFreq=1190400 MaxFreq=1190400 CurrentFreq=1190400 IdleStates: C1=0 c6=0 
+GPU MinFreq=905250000 MaxFreq=905250000 CurrentFreq=905250000
+EMC MinFreq=204000000 MaxFreq=1600000000 CurrentFreq=1600000000 FreqOverride=1
+DLA0_CORE:   Online=1 MinFreq=0 MaxFreq=1054100000 CurrentFreq=1054100000
+DLA0_FALCON: Online=1 MinFreq=0 MaxFreq=630000000 CurrentFreq=630000000
+DLA1_CORE:   Online=1 MinFreq=0 MaxFreq=1054100000 CurrentFreq=1054100000
+DLA1_FALCON: Online=1 MinFreq=0 MaxFreq=630000000 CurrentFreq=630000000
+PVA0_VPS0: Online=1 MinFreq=0 MaxFreq=762000000 CurrentFreq=762000000
+PVA0_VPS1: Online=1 MinFreq=0 MaxFreq=762000000 CurrentFreq=762000000
+PVA0_AXI:  Online=1 MinFreq=0 MaxFreq=533400000 CurrentFreq=533400000
+PVA1_VPS0: Online=1 MinFreq=0 MaxFreq=762000000 CurrentFreq=762000000
+PVA1_VPS1: Online=1 MinFreq=0 MaxFreq=762000000 CurrentFreq=762000000
+PVA1_AXI:  Online=1 MinFreq=0 MaxFreq=533400000 CurrentFreq=533400000
+CVNAS MinFreq=0 MaxFreq=1011200000 CurrentFreq=1011200000
+FAN Dynamic Speed control=active hwmon3_pwm1=100
+NV Power Mode: MODE_30W_ALL

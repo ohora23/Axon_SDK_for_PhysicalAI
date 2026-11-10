@@ -1,0 +1,7 @@
+Linux hermes-head 5.10.216-rt108-tegra #1 SMP PREEMPT RT Thu Oct 15 01:08:34 KST 2026 aarch64 aarch64 aarch64 GNU/Linux
+NV Power Mode: MODE_30W_ALL
+root=/dev/nvme0n1p1 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4 video=efifb:off  isolcpus=managed_irq,domain,4-7 irqaffinity=0-3 kthread_cpus=0-3 
+isolated=4-7 rt_runtime=950000
+cpu4:  Online=1 Governor=schedutil MinFreq=1190400 MaxFreq=1190400 CurrentFreq=1190400 IdleStates: C1=1 c6=1 
+GPU MinFreq=114750000 MaxFreq=905250000 CurrentFreq=114750000
+EMC MinFreq=204000000 MaxFreq=1600000000 CurrentFreq=1065600000 FreqOverride=0

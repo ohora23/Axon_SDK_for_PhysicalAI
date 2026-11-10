@@ -1,0 +1,9 @@
+    stress-ng-io-21492   [001] dnL.411 198639.385866: sched_wakeup: comm=kworker/1:0H pid=16733 prio=100 target_cpu=001
+    stress-ng-io-21492   [001] d...2.. 198639.385872: sched_switch: prev_comm=stress-ng-io prev_pid=21492 prev_prio=120 prev_state=R+ ==> next_comm=kworker/1:0H next_pid=16733 next_prio=100
+    kworker/1:0H-16733   [001] d...2.. 198639.385887: sched_switch: prev_comm=kworker/1:0H prev_pid=16733 prev_prio=100 prev_state=I ==> next_comm=stress-ng-io next_pid=21492 next_prio=120
+    stress-ng-io-21492   [001] d...2.. 198639.385896: sched_switch: prev_comm=stress-ng-io prev_pid=21492 prev_prio=120 prev_state=D ==> next_comm=stress-ng-io next_pid=21489 next_prio=120
+    stress-ng-io-21489   [001] d..h... 198639.386158: irq_handler_entry: irq=13 name=arch_timer
+    stress-ng-io-21489   [001] dN.h3.. 198639.386166: sched_wakeup: comm=cyclictest pid=21504 prio=4 target_cpu=001
+    stress-ng-io-21489   [001] dN.h... 198639.386169: irq_handler_exit: irq=13 ret=handled
+    stress-ng-io-21489   [001] d...2.. 198639.386175: sched_switch: prev_comm=stress-ng-io prev_pid=21489 prev_prio=120 prev_state=R+ ==> next_comm=cyclictest next_pid=21504 next_prio=4
+      cyclictest-21504   [001] ....... 198639.387339: tracing_mark_write: hit latency threshold (1125 > 1000)

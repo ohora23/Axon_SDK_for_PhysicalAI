@@ -1,0 +1,29 @@
+Linux hermes-head 5.10.216-rt108-tegra #1 SMP PREEMPT RT Thu Oct 15 01:08:34 KST 2026 aarch64 aarch64 aarch64 GNU/Linux
+NV Power Mode: MAXN
+root=/dev/nvme0n1p1 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200n8 console=tty0 fbcon=map:0 net.ifnames=0 rootfstype=ext4 video=efifb:off  isolcpus=managed_irq,domain,4-7 irqaffinity=0-3 kthread_cpus=0-3 
+isolated=4-7 nohz_full=
+SOC family:tegra194  Machine:Jetson-AGX
+Online CPUs: 0-7
+cpu0:  Online=1 Governor=schedutil MinFreq=2265600 MaxFreq=2265600 CurrentFreq=2265600 IdleStates: C1=0 c6=0 
+cpu1:  Online=1 Governor=schedutil MinFreq=2265600 MaxFreq=2265600 CurrentFreq=2265600 IdleStates: C1=0 c6=0 
+cpu2:  Online=1 Governor=schedutil MinFreq=2265600 MaxFreq=2265600 CurrentFreq=2265600 IdleStates: C1=0 c6=0 
+cpu3:  Online=1 Governor=schedutil MinFreq=2265600 MaxFreq=2265600 CurrentFreq=2265600 IdleStates: C1=0 c6=0 
+cpu4:  Online=1 Governor=schedutil MinFreq=2265600 MaxFreq=2265600 CurrentFreq=2265600 IdleStates: C1=0 c6=0 
+cpu5:  Online=1 Governor=schedutil MinFreq=2265600 MaxFreq=2265600 CurrentFreq=2265600 IdleStates: C1=0 c6=0 
+cpu6:  Online=1 Governor=schedutil MinFreq=2265600 MaxFreq=2265600 CurrentFreq=2265600 IdleStates: C1=0 c6=0 
+cpu7:  Online=1 Governor=schedutil MinFreq=2265600 MaxFreq=2265600 CurrentFreq=2265600 IdleStates: C1=0 c6=0 
+GPU MinFreq=1377000000 MaxFreq=1377000000 CurrentFreq=1377000000
+EMC MinFreq=204000000 MaxFreq=2133000000 CurrentFreq=2133000000 FreqOverride=1
+DLA0_CORE:   Online=1 MinFreq=0 MaxFreq=1395200000 CurrentFreq=1395200000
+DLA0_FALCON: Online=1 MinFreq=0 MaxFreq=844800000 CurrentFreq=844800000
+DLA1_CORE:   Online=1 MinFreq=0 MaxFreq=1395200000 CurrentFreq=1395200000
+DLA1_FALCON: Online=1 MinFreq=0 MaxFreq=844800000 CurrentFreq=844800000
+PVA0_VPS0: Online=1 MinFreq=0 MaxFreq=1088000000 CurrentFreq=1088000000
+PVA0_VPS1: Online=1 MinFreq=0 MaxFreq=1088000000 CurrentFreq=1088000000
+PVA0_AXI:  Online=1 MinFreq=0 MaxFreq=844800000 CurrentFreq=844800000
+PVA1_VPS0: Online=1 MinFreq=0 MaxFreq=1088000000 CurrentFreq=1088000000
+PVA1_VPS1: Online=1 MinFreq=0 MaxFreq=1088000000 CurrentFreq=1088000000
+PVA1_AXI:  Online=1 MinFreq=0 MaxFreq=844800000 CurrentFreq=844800000
+CVNAS MinFreq=0 MaxFreq=1356800000 CurrentFreq=1356800000
+FAN Dynamic Speed control=active hwmon3_pwm1=100
+NV Power Mode: MAXN

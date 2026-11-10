@@ -11,6 +11,7 @@ Every run goes through a **resource harness** so verification never freezes the 
 | `gpu/gpu_sidecar_demo` | axon sidecar carries a **real GPU memory handle** → zero-copy GPU↔GPU across processes | none | ✅ verified |
 | `jetson/nvbuf_probe` | on a Jetson: UVC camera → NvBufSurface → another process's CUDA, **no copy** (needs the board) | none | ✅ verified |
 | `jetson/rt/run_jitter*.sh`, `trace_break.sh` | 1 kHz `cyclictest` worst case, idle and under load, all CPUs or isolated 4-7; ftrace at the first sample > 1 ms; `build-rt.sh`/`install-rt.sh` (`BOOT_PART=`) make and install a Xavier PREEMPT_RT kernel | sudo (once) | 🟡 isolated: 133/226 µs (30 W), 74/148 µs (MAXN) |
+| `jetson/board_doctor.sh` | read-only board check: which partition the firmware really boots (running kernel vs every `boot/Image*`), extlinux DEFAULT, root-fs vs boot-partition kernel, NIC profiles bound by MAC, kernel of recent boots, pstore, apt hold, RT/isolation state. Run before and after boot-config changes, after `apt upgrade`, after the board was unreachable | sudo for the boot-partition checks | ✅ tested on hermes-head |
 | `perf/run_pagefaults.sh` | RT loop adds **0 page faults/frame** (mlockall/MAP_POPULATE) | none | ✅ verified |
 | `perf/run_syscalls.sh` | axon payload path is **0 transport syscalls/frame** vs ROS2's DDS | none | ✅ verified |
 | `perf/run_membw.sh` | ROS2 burns **8.6× the cache-misses** copying payloads; axon doesn't | perf (paranoid≤1) | ✅ verified |

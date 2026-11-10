@@ -53,7 +53,7 @@
 - [ ] **ROS Discourse 글** — 사용자가 게시하지 않기로 함(2026-10-19). 초안 `.omc/discourse_draft.md`는 #48의 MPS 결과(5× → 1.5×)를 반영하지 않았음
 - [ ] **남은 비교** — 카메라 캡처→추론 end-to-end(보드 필요). 부하 시 꼬리 지연은 #57에서 측정: 고정 없이 CPU 부하면 모든 전송 p99 6~9 ms, 코어 고정 시 axon·iceoryx2는 1 MiB 중앙값 유지, ROS 2 loaned는 15배. RT 설정(isolcpus/nohz_full/SCHED_FIFO/PREEMPT_RT) 아래 꼬리는 미측정(부팅 파라미터 = 사용자 결정). NITROS는 Isaac ROS 5.0에서 `rosidl::Buffer` CUDA 백엔드로 대체됨(#47에서 측정한 경로). 같은 클럭에서도 남던 세션 간 ~35% 편차는 L3 경쟁(생산자가 DRAM에서 다시 채우는 양)과 일치함(#53, 당시 세션의 DRAM fill은 기록 없음). 1 µs hold의 p90 ~420 µs는 프레임 26~30%가 절반 클럭(2.61 GHz)으로 도는 꼬리 — POLL(0 µs) 또는 프레임 2 ms 전 pre-wake spin으로 제거(#54). SDK API `rt_sleep_until_prewarmed(deadline_ns, spin_us)` 추가(#55, API 경유 p90 220~221 µs). 커널 7.0.0-38(EPP balance_performance)에서도 같은 결과(#56)
 - [ ] **개발 PC 주의** — 9800X3D 물리 코어 2~4 불량 의심, `cpu-offline-cores.service`로 CPU 2·3·4·10·11·12를 끈 상태. 벤치마크에 코어 상태를 기록할 것. CPU RMA 예정(Obsidian `Tasks/Hardware/CPU RMA 자료 …`)
-- [ ] **Jetson에서 `wait_any` 확인** — r35 커널 5.10에는 `futex_waitv`가 없어 100 µs 폴링으로 동작. 보드 복구 후 테스트
+- [x] **Jetson에서 `wait_any` 확인** — 2026-11-10: hermes-head(RT 커널 5.10.216-rt108, 헤더 linux-libc-dev 5.4라 futex_waitv 없음 → 100 µs 폴링 경로로 빌드됨)에서 main 빌드, ctest 10/10, test_wait 3/3 통과
 - [ ] **AMD XDNA 백엔드** (`AXON_ENABLE_AMD_XDNA`) — 하드웨어 없음 (이 PC 9800X3D엔 NPU 없음)
 - [ ] **실제 로봇 통합** — 실 센서(UVC 웹캠)는 Jetson에서 검증 완료
 

@@ -14,7 +14,7 @@ restore() {
   [ -n "$SP" ] && kill $SP 2>/dev/null
   echo 0 > $T/tracing_on
   for e in $EV; do [ -e $T/events/$e/enable ] && echo 0 > $T/events/$e/enable; done
-  echo > $T/trace; echo "$buf0" > $T/buffer_size_kb
+  echo "$buf0" > $T/buffer_size_kb   # resizing drops the buffer; an interrupted capture is lost
 }
 trap restore EXIT
 echo 0 > $T/tracing_on; echo > $T/trace; echo nop > $T/current_tracer

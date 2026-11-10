@@ -208,7 +208,7 @@ kernel's extlinux entry. 30 W = `MODE_30W_ALL` (CPUs at 1.19 GHz); MAXN runs the
 with EMC at 2,133 MHz. One run per row.
 
 - **PREEMPT_RT alone does not remove the ~1.1-1.2 ms spikes.** Without isolation every CPU
-  still hits 1.1-1.2 ms under load, on the RT kernel as on the stock one, with or without
+  still hits 1.1-1.3 ms under load, on the RT kernel as on the stock one, with or without
   locked clocks (so not DVFS). The same size of spike also shows up idle, rarely (1-3 in
   2.4 M samples, with no `stress-ng` running).
 - **Under load, isolating the RT CPUs removes them.** At the same power mode and clocks
@@ -246,7 +246,10 @@ extlinux entry. **Install it on the partition the firmware boots.** This board b
 the RT entry sat in the NVMe `/boot/extlinux/extlinux.conf`, which nothing read: every boot ran
 the stock kernel, and boots that did not come back on the network were blamed on the RT kernel.
 They were a NIC-naming race (next paragraph). `install-rt.sh` now takes `BOOT_PART=` and
-refuses when the running kernel is not that partition's `/boot/Image`. Check with
+refuses when the running kernel is neither that partition's `/boot/Image` nor its `/boot/Image.rt`.
+That guard cannot tell two partitions apart while both hold the same stock `Image` (a root fs
+cloned from the boot partition), which is how this board started; `board_doctor.sh` breaks the
+tie by which partition's DEFAULT entry boots the running kernel. Check with
 `uname -v` against `strings /boot/Image | grep "Linux version"` on each candidate partition.
 `apt upgrade` of `nvidia-l4t-kernel` has the same blind spot: it rewrote the NVMe `/boot`
 (and reset `DEFAULT` to `primary` there) while the eMMC kernel stayed on the old release.

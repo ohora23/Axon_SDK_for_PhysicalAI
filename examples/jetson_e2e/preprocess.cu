@@ -5,7 +5,8 @@
 
 namespace {
 
-// One thread per output pixel: nearest source pixel, BT.601 full range, (x/255 - mean)/std.
+// One thread per output pixel: nearest source pixel, BT.601 full-range coefficients (the UVC
+// camera reports limited range; this only shifts colours, not timing), (x/255 - mean)/std.
 __global__ void yuyv_to_nchw_kernel(const uint8_t* src, uint32_t src_w, uint32_t src_h,
                                     uint32_t row_pitch, float* dst, int dst_w, int dst_h) {
     const int px = blockIdx.x * blockDim.x + threadIdx.x;

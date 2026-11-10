@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // axon Jetson demo — camera → TensorRT inference, end to end, zero-copy against a copy path.
 //
-//   producer zerocopy /dev/videoN [frames]: the camera DMAs into an NvBufSurface pool (as in
-//            jetson_camera); the consumer gets the frame's CUDA pointer directly.
+//   producer zerocopy /dev/videoN [frames]: the driver writes each frame into an NvBufSurface pool
+//            slot (as in jetson_camera; no user-space copy); the consumer gets its CUDA pointer.
 //   producer copy /dev/videoN [frames]: V4L2 MMAP buffers, memcpy'd into a host (memfd) pool;
-//            the consumer copies the frame to the GPU (H2D) before using it.
+//            the consumer copies the frame to the GPU (pageable H2D) before using it.
 //   consumer zerocopy|copy <engine.plan> <frames> <out.csv>: YUYV → normalised NCHW on the GPU,
-//            then TensorRT; one CSV row per frame and a per-stage summary.
+//            then TensorRT; one CSV row per frame and a per-stage summary. E2E_WARM_GPU=1 runs a
+//            small kernel before each frame is taken (outside the timed stages), so the first
+//            timed GPU step does not also pay for waking the GPU between frames.
 //
 // All timestamps are CLOCK_MONOTONIC_RAW (axon::rt_now_ns). The capture time is the V4L2 buffer
 // timestamp (CLOCK_MONOTONIC) moved to MONOTONIC_RAW with the offset read at DQBUF.
@@ -144,10 +146,11 @@ int producer_zerocopy(const char* dev, long frames) {
         b.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         b.memory = V4L2_MEMORY_DMABUF;
         if (xioctl(v, VIDIOC_DQBUF, &b) < 0) { perror("DQBUF"); break; }
+        if (b.flags & V4L2_BUF_FLAG_ERROR) fprintf(stderr, "producer: frame %ld flagged corrupt by the driver\n", n);
         AcquiredDescriptor a = pub->acquire_descriptor();
         a.buffer_index = static_cast<int>(b.index);   // the camera picked the slot
         fill(a, pool->row_pitch(), b);
-        pub->publish(std::move(a));
+        if (pub->publish(std::move(a)) < 0) perror("publish");
         if (qbuf_dmabuf(v, *pool, held) < 0) { perror("re-QBUF"); break; }
         held = static_cast<int>(b.index);
     }
@@ -193,10 +196,11 @@ int producer_copy(const char* dev, long frames) {
         b.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         b.memory = V4L2_MEMORY_MMAP;
         if (xioctl(v, VIDIOC_DQBUF, &b) < 0) { perror("DQBUF"); break; }
+        if (b.flags & V4L2_BUF_FLAG_ERROR) fprintf(stderr, "producer: frame %ld flagged corrupt by the driver\n", n);
         AcquiredDescriptor a = pub->acquire_descriptor();   // the pool picks the slot
         std::memcpy(a.host_view, maps[b.index], kFrameBytes);
         fill(a, kW * 2, b);
-        pub->publish(std::move(a));
+        if (pub->publish(std::move(a)) < 0) perror("publish");
         if (xioctl(v, VIDIOC_QBUF, &b) < 0) { perror("re-QBUF"); break; }
     }
     xioctl(v, VIDIOC_STREAMOFF, &type);
@@ -246,8 +250,10 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
 
     const char* in_name = nullptr;
     const char* out_name = nullptr;
-    for (int i = 0; i < engine->getNbIOTensors(); ++i) {
+    if (engine->getNbIOTensors() != 2) { fprintf(stderr, "engine needs exactly one input and one output\n"); return 1; }
+    for (int i = 0; i < 2; ++i) {
         const char* n = engine->getIOTensorName(i);
+        if (engine->getTensorDataType(n) != nvinfer1::DataType::kFLOAT) { fprintf(stderr, "%s is not FP32\n", n); return 1; }
         (engine->getTensorIOMode(n) == nvinfer1::TensorIOMode::kINPUT ? in_name : out_name) = n;
     }
     if (!in_name || !out_name) { fprintf(stderr, "engine needs one input and one output\n"); return 1; }
@@ -262,8 +268,11 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
     CK(cudaMalloc(&d_in, sizeof(float) * 3 * net_h * net_w));
     CK(cudaMalloc(&d_out, sizeof(float) * n_out));
     if (!zerocopy) CK(cudaMalloc(&d_stage, kFrameBytes));
-    ctx->setTensorAddress(in_name, d_in);
-    ctx->setTensorAddress(out_name, d_out);
+    if (!ctx->setTensorAddress(in_name, d_in) || !ctx->setTensorAddress(out_name, d_out)) {
+        fprintf(stderr, "setTensorAddress failed\n");
+        return 1;
+    }
+    const bool warm_gpu = getenv("E2E_WARM_GPU") && atoi(getenv("E2E_WARM_GPU"));
     std::vector<float> scores(static_cast<std::size_t>(n_out));
     printf("consumer(%s): engine %s [1,3,%d,%d] -> %lld\n", zerocopy ? "zerocopy" : "copy", engine_path, net_h,
            net_w, static_cast<long long>(n_out));
@@ -278,8 +287,19 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
     const long warmup = 30;
     long seen = 0, recorded = 0, skipped = 0;
     std::uint64_t last = 0;
+    int idle_ms = 0;
     while (recorded < frames) {
-        if (sub->wait_for_update(1000) <= 0) continue;
+        const int w = sub->wait_for_update(1000);
+        if (w < 0) { perror("wait_for_update"); return 1; }
+        if (w == 0) {
+            if ((idle_ms += 1000) >= 5000) { fprintf(stderr, "no frame for 5 s: producer gone?\n"); return 1; }
+            continue;
+        }
+        idle_ms = 0;
+        if (warm_gpu) {   // wake the GPU outside the timed stages (scratch input, result unused)
+            CK(launch_yuyv_to_nchw(reinterpret_cast<const std::uint8_t*>(d_in), 2, 2, 4, d_out, 1, 1, stream));
+            CK(cudaStreamSynchronize(stream));
+        }
         auto v = sub->latest_view();
         if (!v || v->seqno == last) continue;
         const std::uint64_t t_view = rt_now_ns();
@@ -322,8 +342,8 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
         ++recorded;
     }
     fclose(csv);
-    printf("consumer(%s): %ld frames -> %s, %ld frames skipped (consumer behind)\n", zerocopy ? "zerocopy" : "copy",
-           recorded, out_csv, skipped);
+    printf("consumer(%s%s): %ld frames -> %s, %ld frames skipped (consumer behind)\n", zerocopy ? "zerocopy" : "copy",
+           warm_gpu ? ", GPU pre-warmed" : "", recorded, out_csv, skipped);
     summary("cap_to_pub", cap_pub);
     summary("pub_to_view", pub_view);
     summary("view_to_gpu", view_gpu);

@@ -1,0 +1,8 @@
+consumer(zerocopy): engine /home/hermes/axon-dev/models/resnet18_fp16.engine [1,3,224,224] -> 1000
+consumer(zerocopy, GPU pre-warmed): 600 frames -> /home/hermes/axon-dev/src/instrumentation/jetson/e2e/results/jetson_clocks_warm/e2e_zerocopy_r2.csv, 0 frames skipped (consumer behind)
+  cap_to_pub   p50  32090.6  p90  36121.3  p99  36156.7  max  36217.2 us
+  pub_to_view  p50    458.2  p90    542.6  p99    565.4  max    580.8 us
+  view_to_gpu  p50      0.1  p90      0.4  p99      0.4  max      0.4 us
+  gpu_to_pre   p50     60.9  p90     62.2  p99    109.9  max    126.2 us
+  pre_to_inf   p50   1684.2  p90   1697.1  p99   1720.9  max   1733.1 us
+  cap_to_inf   p50  34323.1  p90  38360.6  p99  38435.5  max  38492.0 us

@@ -1,7 +1,7 @@
 #!/bin/bash
 # On the board, as root: install the RT kernel next to the stock one and make it the default.
 # The stock kernel stays as extlinux LABEL primary. Revert:
-#   sudo sed -i 's/^DEFAULT rt$/DEFAULT primary/' /boot/extlinux/extlinux.conf
+#   sudo sed -i 's/^DEFAULT rt$/DEFAULT primary/' <boot partition>/boot/extlinux/extlinux.conf
 # A kernel that fails to boot can only be bypassed from the console (pick "primary" in the
 # boot menu), so have HDMI + keyboard or the serial console attached before rebooting.
 #
@@ -17,11 +17,22 @@ K=$(realpath "$1")
 REL=$(ls "$K/lib/modules")
 B=""
 if [ -n "${BOOT_PART:-}" ]; then
-    B=$(mktemp -d); mount "$BOOT_PART" "$B"; trap 'umount "$B"; rmdir "$B"' EXIT
+    B=$(mktemp -d); trap 'umount "$B" 2>/dev/null; rmdir "$B"' EXIT; mount "$BOOT_PART" "$B"
 fi
 CONF=$B/boot/extlinux/extlinux.conf
-if ! strings "$B/boot/Image" | grep -qF "$(uname -v)" && [ "${FORCE:-0}" != 1 ]; then
-    echo "running kernel '$(uname -v)' is not $B/boot/Image: the firmware boots another" >&2
+# The running kernel (stock or an RT one installed before) must be one of this partition's
+# images. strings goes to a variable first: grep -q in a pipe would SIGPIPE it under pipefail.
+running_found() {
+    local f v
+    for f in "$B/boot/Image" "$B/boot/Image.rt"; do
+        [ -f "$f" ] || continue
+        v=$(strings "$f" | grep -m1 "Linux version" || true)
+        case "$v" in *"$(uname -v)"*) return 0 ;; esac
+    done
+    return 1
+}
+if ! running_found && [ "${FORCE:-0}" != 1 ]; then
+    echo "running kernel '$(uname -v)' is not in $B/boot/Image{,.rt}: the firmware boots another" >&2
     echo "partition (set BOOT_PART), or /boot/Image changed since boot (apt?). FORCE=1 to go on." >&2
     exit 1
 fi

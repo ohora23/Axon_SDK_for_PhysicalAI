@@ -157,7 +157,7 @@ flowchart LR
 | GPU zero-copy import | 실제 하드웨어 | **RTX 5080: 200/200 프레임, 복사 0, 1.68 GB** ✅ |
 | 센서 → 가속기, 복사 없음 | 실제 보드 + 실제 센서 | **AGX Xavier + UVC 웹캠: host == CUDA view 30/30 프레임, staleness ~0.5 ms** ✅ |
 | Staleness 한계 | 명시적 7개 항의 합 | 결정적 산식 (§5) ✅ |
-| 1kHz RT 최악 지터 | < 100µs | Jetson Xavier, PREEMPT_RT + CPU 격리: 무부하 74 µs, 부하 148~226 µs. 격리 없는 RT는 1.1~1.2 ms 튐이 남음([§7](docs/hardware-verification.md)) 🟡 |
+| 1kHz RT 최악 지터 | < 100µs | Jetson Xavier, PREEMPT_RT + CPU 격리: 30 W에서 무부하/부하 133/226 µs, MAXN에서 74/148 µs. 격리 없는 RT는 1.1~1.2 ms 튐이 남음([§7](docs/hardware-verification.md)) 🟡 |
 
 산식:
 ```
@@ -419,7 +419,7 @@ A. Apache 2.0 (특허 그랜트 포함 — 로봇 산업 채택에 더 친화적
 
 다음:
 
-- [x] PREEMPT_RT 커널에서 `cyclictest` 1 kHz 지터 (Xavier: 격리 시 무부하 74 µs, 부하 148~226 µs. 부하 시 < 100 µs는 미달)
+- [x] PREEMPT_RT 커널에서 `cyclictest` 1 kHz 지터 (Xavier 격리: 30 W 133/226 µs, MAXN 74/148 µs. 부하 시 < 100 µs는 미달)
 - [ ] AMD XDNA 백엔드 + 실 로봇 통합
 
 ---

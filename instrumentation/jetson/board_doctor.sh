@@ -60,7 +60,9 @@ for i in "${!NAMES[@]}"; do
     r=${ROOTS[$i]}; conf="$r/boot/extlinux/extlinux.conf"
     label="(none)"; dimg=""
     if [ -f "$conf" ]; then
-        label=$(xl_default "$conf"); label=${label:-"(none)"}
+        label=$(xl_default "$conf")
+        label=${label:-$(awk '{sub(/\r$/,"")} toupper($1)=="LABEL"{print $2; exit}' "$conf")}   # no DEFAULT: first entry
+        label=${label:-"(none)"}
         dl=$(xl_linux "$conf" "$label"); [ -n "$dl" ] && dimg="$r$dl"
     fi
     held=""
@@ -90,12 +92,14 @@ else
 fi
 
 if [ "$known" = 1 ]; then
-    B=${ROOTS[$bi]}; conf="$B/boot/extlinux/extlinux.conf"
+    B=${ROOTS[$bi]}; conf="$B/boot/extlinux/extlinux.conf"; dl=""
     # ── 2. boot-default ──
     if [ -f "$conf" ]; then
         label=$(xl_default "$conf"); dl=$(xl_linux "$conf" "${label:-}")
         report INFO boot-default "DEFAULT=${label:-(none)} LINUX=${dl:-(not found)}"
-        if [ -n "$dl" ] && ! runs "$B$dl"; then
+        if [ -n "$dl" ] && [ ! -f "$B$dl" ]; then
+            report WARN boot-default "DEFAULT image $dl is missing on the boot partition: the next boot may fail"
+        elif [ -n "$dl" ] && ! runs "$B$dl"; then
             report WARN boot-default "the DEFAULT entry boots a different kernel than the one running now"
         fi
     fi
@@ -104,7 +108,6 @@ if [ "$known" = 1 ]; then
     fi
     # ── 3. kernel-vs-rootfs ──
     if [ -n "$B" ]; then
-        dl=$(xl_linux "$conf" "$(xl_default "$conf")")
         if [ -z "$dl" ] || [ ! -f "/$dl" ] || [ ! -f "$B$dl" ]; then
             report INFO kernel-vs-rootfs "DEFAULT image missing on one side (${dl:-none})"
         elif cmp -s "/$dl" "$B$dl"; then
@@ -122,6 +125,8 @@ if [ "$known" = 1 ]; then
         else
             report WARN apt-hold "nvidia-l4t-kernel is not held: apt writes the root fs /boot, not the boot partition"
         fi
+    else
+        report INFO apt-hold "the root fs is the boot partition"
     fi
 else
     report INFO boot-default "boot partition unknown, skipped (also kernel-vs-rootfs, apt-hold)"
@@ -135,7 +140,11 @@ else
 fi
 
 # ── 5. nic-binding ──
-if command -v nmcli >/dev/null; then
+if ! command -v nmcli >/dev/null; then
+    report INFO nic-binding "nmcli not found"
+elif ! nmcli -t general status >/dev/null 2>&1; then
+    report INFO nic-binding "NetworkManager not running"
+else
     n_eth=$(nmcli -t -f DEVICE,TYPE dev 2>/dev/null | grep -c ':ethernet$'); n_eth=${n_eth:-0}
     by_name=0
     while IFS=: read -r uuid type; do
@@ -151,12 +160,10 @@ if command -v nmcli >/dev/null; then
     else
         report PASS nic-binding "$n_eth ethernet device(s); no name-bound profile at risk"
     fi
-else
-    report INFO nic-binding "nmcli not found"
 fi
 
 # ── 6. recent-boots ──
-boots=$(journalctl --list-boots --no-pager 2>/dev/null | tail -n 6)
+boots=$(journalctl --list-boots --no-legend --no-pager 2>/dev/null | tail -n 6)
 if [ -n "$boots" ] && [ "$(journalctl -q -b 0 -k -n 1 --no-pager 2>/dev/null | wc -l)" -gt 0 ]; then
     while read -r off _; do
         k=$(journalctl -q -b "$off" -k --no-pager 2>/dev/null | grep -m1 -o 'Linux version [^ ]*' | cut -d' ' -f3)

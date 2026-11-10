@@ -5,11 +5,11 @@
 #     ->  results/<tag>/e2e_<mode>_r<rep>.{csv,txt}, env.txt (with GPU clocks and E2E_WARM_GPU)
 # E2E_WARM_GPU=1 is passed through to the consumer.
 set -u
-BUILD=${1:?usage: run_e2e.sh <build_dir> <engine.plan> [frames] [reps]}
+BUILD=${1:?usage: run_e2e.sh <build_dir> <engine.plan> [frames] [reps] [tag]}
 ENGINE=${2:?engine.plan}
 FRAMES=${3:-600}
 REPS=${4:-2}
-TAG=${5:-run}
+TAG=${5:-run_$(date +%Y%m%d_%H%M%S)}
 BIN=$BUILD/examples/jetson_e2e/axon_jetson_e2e
 OUT=$(cd "$(dirname "$0")" && pwd)/results/$TAG
 mkdir -p "$OUT"
@@ -17,8 +17,8 @@ mkdir -p "$OUT"
 
 { uname -a; nvpmodel -q 2>/dev/null | head -1; echo "isolated=$(cat /sys/devices/system/cpu/isolated)"
   v4l2-ctl -d /dev/video0 --get-fmt-video 2>/dev/null; echo "engine=$ENGINE frames=$FRAMES reps=$REPS E2E_WARM_GPU=${E2E_WARM_GPU:-0}"
-  for d in /sys/devices/17000000.gv11b/devfreq/17000000.gv11b /sys/class/devfreq/17000000.gv11b; do
-    [ -r "$d/cur_freq" ] && { echo "gpu_freq cur=$(cat $d/cur_freq) min=$(cat $d/min_freq) max=$(cat $d/max_freq)"; break; }; done
+  gpu=$(ls -d /sys/class/devfreq/*.gv11b /sys/class/devfreq/*.ga10b 2>/dev/null | head -1)   # Xavier, Orin
+  [ -n "$gpu" ] && echo "gpu_freq cur=$(cat $gpu/cur_freq) min=$(cat $gpu/min_freq) max=$(cat $gpu/max_freq)" || echo "gpu_freq unknown"
   echo "cpu4 min=$(cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_min_freq) max=$(cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_max_freq)"
 } > "$OUT/env.txt"
 

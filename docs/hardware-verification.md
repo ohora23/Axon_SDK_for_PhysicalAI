@@ -196,7 +196,8 @@ consumer on isolated CPU 4, producer on CPUs 0-3, `MODE_30W_ALL`; 1,200 frames p
 × 600), none skipped. Raw per-frame CSV in
 [`instrumentation/jetson/e2e/results/`](../instrumentation/jetson/e2e/results/)
 (`*_warm`: table below; `*_nowarm`: the first runs, discussed under it). p50 (p99) in µs, with
-the GPU woken before each frame is taken (`E2E_WARM_GPU=1`, outside the timed stages):
+the GPU woken before each frame is taken (`E2E_WARM_GPU=1`; it runs before the frame is read, so
+it lands in publish → received, outside the frame-processing stages below):
 
 | stage | zerocopy | copy | zerocopy, `jetson_clocks` | copy, `jetson_clocks` |
 |---|---|---|---|---|
@@ -206,16 +207,18 @@ the GPU woken before each frame is taken (`E2E_WARM_GPU=1`, outside the timed st
 | inference | 10,819 (10,892) | 10,819 (10,874) | 1,684 (1,730) | 1,689 (1,752) |
 | **received → inferred** | **11,056** (11,134) | 11,486 (11,575) | **1,746** (1,800) | 1,947 (2,115) |
 
-- **Zero-copy saves exactly the H2D copy:** 0.43 ms at the default clocks and 0.20 ms with
+- **Zero-copy saves the H2D copy, and nothing else:** 0.43 ms at the default clocks and 0.20 ms with
   `jetson_clocks`, from receive to inference (4 % and 10 %); over the whole path including the
   producer's `memcpy` (about 0.1 ms, in capture → publish) 0.5 and 0.3 ms. The pre-processing
   kernel takes the same time on the `NvBufSurface` as on a `cudaMalloc` buffer.
 - **Waking the GPU costs more than the copy.** The GPU idles between 30 fps frames; the first GPU
-  step after the idle pays about 1.1 ms at the default clocks and 0.35 ms with `jetson_clocks`.
+  step after the idle pays about 0.9-1.1 ms at the default clocks and 0.3-0.35 ms with
+  `jetson_clocks`.
   In the first runs (`*_nowarm`) that step was the kernel in zerocopy and the H2D copy in copy,
   so zerocopy's kernel looked 4.7× slower (1,163 against 245 µs) and copy's H2D 1,338 µs; an
   earlier version of this section read that as slow reads of the surface, which the warm runs
-  rule out. Receive → inferred in those runs: 12,010 against 12,427 µs, 2,077 against 2,271 µs.
+  rule out (the `*_nowarm` env.txt predates the clock record; the directory name is the only
+  record of `jetson_clocks` there). Receive → inferred in those runs: 12,010 against 12,427 µs, 2,077 against 2,271 µs.
   With the warm-up, publish → received grows by the same amount (1,173 µs against 106 µs at the
   default clocks), because the warm-up runs there.
 - **The camera dominates the total.** uvcvideo stamps the frame when its first USB packet

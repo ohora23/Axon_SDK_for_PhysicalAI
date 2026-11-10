@@ -7,7 +7,7 @@
 //            the consumer copies the frame to the GPU (pageable H2D) before using it.
 //   consumer zerocopy|copy <engine.plan> <frames> <out.csv>: YUYV → normalised NCHW on the GPU,
 //            then TensorRT; one CSV row per frame and a per-stage summary. E2E_WARM_GPU=1 runs a
-//            small kernel before each frame is taken (outside the timed stages), so the first
+//            small kernel before each frame is taken (it lands in publish → received), so the first
 //            timed GPU step does not also pay for waking the GPU between frames.
 //
 // All timestamps are CLOCK_MONOTONIC_RAW (axon::rt_now_ns). The capture time is the V4L2 buffer

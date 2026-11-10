@@ -9,7 +9,8 @@ A UVC camera feeds a ResNet-18 (TensorRT, FP16) in another process, two ways:
   the consumer copies the frame to the GPU (pageable `cudaMemcpyAsync` H2D) before the kernel.
 
 Set `E2E_WARM_GPU=1` to wake the GPU before each frame is taken: at 30 fps the GPU idles between
-frames, and otherwise the first timed GPU step also pays for waking it up.
+frames, and otherwise the first timed GPU step also pays for waking it up. The warm-up runs
+before the frame is read, so its time shows up in publish → received instead.
 
 Both then convert YUYV to normalised RGB at 224×224 on the GPU (`preprocess.cu`) and run the
 engine. Each frame logs the capture time (the V4L2 timestamp, moved from `CLOCK_MONOTONIC` to

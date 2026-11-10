@@ -20,7 +20,7 @@ so verification never freezes the desktop. Tooling lives in
 | 3 | syscalls | axon payload path is **0 transport syscalls / frame** vs ROS2 (25× total) | none | ✅ |
 | 4 | memory/cache | ROS2 spends **8.6× the cache-misses** copying payloads; axon doesn't | perf (paranoid≤1) | ✅ |
 | 5 | eBPF copy | direct `copy_to_user` byte count | sudo | tool |
-| 6 | Jetson NvBufSurface | **camera → CUDA with no copy** across processes on a real Jetson + UVC camera | none | ✅ |
+| 6 | Jetson NvBufSurface | **camera → CUDA with no copy** across processes on a real Jetson + UVC camera; camera → TensorRT end to end: zero-copy 0.2-0.4 ms faster than the copy path, camera readout dominates | none | ✅ |
 | 7 | 1 kHz RT jitter | `cyclictest` worst case on the Jetson: PREEMPT_RT + isolated CPUs 133 / 226 µs (idle / load) at 30 W, 74 / 148 µs at MAXN; RT alone keeps 1.1-1.2 ms spikes | sudo (once) | 🟡 |
 
 ## 0. Resource harness (freeze protection)
@@ -184,6 +184,43 @@ week-1 spike PoC runs against the real camera (staleness 0.07–0.1 ms).
 
 Pitfalls found: an imported surface has `numFilled = 0`, so `NvBufSurfaceSyncForCpu`
 rejects index 0 until it is set to 1; JetPack 5 ships cmake 3.16 (axon needs ≥ 3.22).
+
+### Camera → inference, end to end (zero-copy against a copy path)
+
+[`examples/jetson_e2e`](../examples/jetson_e2e/) feeds the same camera to a ResNet-18
+(TensorRT 8.5, FP16, 224×224) in another process, either straight from the `NvBufSurface`
+pool (zerocopy) or through the usual copies: V4L2 `MMAP` buffer → `memcpy` into a host pool →
+`cudaMemcpyAsync` H2D (copy). Both run the same YUYV→RGB pre-processing kernel and engine.
+PREEMPT_RT kernel, consumer on isolated CPU 4, producer on CPUs 0-3, `MODE_30W_ALL`;
+1,200 frames per cell (2 runs × 600), none skipped. Raw per-frame CSV in
+[`instrumentation/jetson/e2e/results/`](../instrumentation/jetson/e2e/results/).
+p50 (p99) in µs:
+
+| stage | zerocopy | copy | zerocopy, `jetson_clocks` | copy, `jetson_clocks` |
+|---|---|---|---|---|
+| capture → publish | 32,098 (36,163) | 32,202 (36,291) | 32,095 (36,173) | 32,195 (36,330) |
+| publish → consumer has it | 106 (208) | 109 (218) | 104 (208) | 111 (205) |
+| frame on the GPU (H2D) | 0 | 1,338 (1,419) | 0 | 498 (558) |
+| pre-processing kernel | 1,163 (1,204) | 245 (282) | 379 (424) | 65 (383) |
+| inference | 10,844 (10,915) | 10,838 (10,916) | 1,693 (1,761) | 1,698 (1,751) |
+| **received → inferred** | **12,010** (12,087) | 12,427 (12,540) | **2,077** (2,153) | 2,271 (2,357) |
+| capture → inferred | 44,246 (48,368) | 44,775 (48,927) | 34,306 (38,434) | 34,612 (38,741) |
+
+- **The camera dominates.** About 32 ms goes between the V4L2 timestamp (start of the frame)
+  and the frame being ready to publish: the exposure and readout of a 30 fps USB 2.0 webcam.
+  The `memcpy` of the copy path adds about 0.1 ms to it.
+- **Zero-copy saves 0.4 ms at the default clocks and 0.2 ms with `jetson_clocks`**, from
+  receive to inference (3 % and 8 %). It removes the H2D copy (1.34 / 0.50 ms), but the
+  pre-processing kernel reads the `NvBufSurface` 4.7× / 5.8× slower than a `cudaMalloc` buffer
+  (1,163 against 245 µs; 379 against 65 µs), which gives most of it back. The frame memory is
+  what the camera DMAs into and the CPU can map; the kernel's reads of it are evidently far
+  slower than of device memory. Whether a device-to-device copy of the surface before the
+  kernel would be faster than reading it in place was not measured.
+- **GPU clock, not the transport, sets the inference time:** 10.8 ms at the default 30 W
+  clocks, where the GPU idles between frames and wakes at a low clock, against 1.7 ms with
+  `jetson_clocks` (`trtexec` alone: 1.6 ms).
+- With a higher-resolution or faster camera the H2D copy grows with the frame and the camera
+  share shrinks; a RealSense run is planned.
 
 ## 7. 1 kHz RT jitter on the Jetson (AGX Xavier) 🟡
 

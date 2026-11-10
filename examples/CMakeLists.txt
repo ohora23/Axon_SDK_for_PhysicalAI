@@ -25,3 +25,8 @@ endif()
 if(AXON_ENABLE_JETSON AND AXON_WITH_CUDA AND IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/jetson_camera)
     add_subdirectory(jetson_camera)
 endif()
+
+# Jetson E2E camera → inference (zero-copy vs copy path) — needs Jetson + CUDA.
+if(AXON_ENABLE_JETSON AND AXON_WITH_CUDA AND IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/jetson_e2e)
+    add_subdirectory(jetson_e2e)
+endif()

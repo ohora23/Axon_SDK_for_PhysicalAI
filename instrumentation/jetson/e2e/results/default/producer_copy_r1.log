@@ -1,0 +1,1 @@
+producer(copy): 4 MMAP buffers memcpy'd into a host pool; waiting for a consumer

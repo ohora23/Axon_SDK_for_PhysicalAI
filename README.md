@@ -162,6 +162,7 @@ Fast-RTPS on the same workload. Full detail: [docs/hardware-verification.md](doc
 | Page faults during RT | **0** | **0 / frame** (flat at 20× the frames) ✅ |
 | GPU zero-copy import | real hardware | **RTX 5080: 200/200 frames, 0 copies, 1.68 GB** ✅ |
 | Sensor → accelerator, no copy | real board + real sensor | **AGX Xavier + UVC webcam: host == CUDA view on 30/30 frames, staleness ~0.5 ms** ✅ |
+| Camera → inference, end to end | real board + real camera | **AGX Xavier, UVC 640×480 → ResNet-18 TensorRT: zero-copy removes the H2D copy, 0.43 ms (default clocks) / 0.20 ms (`jetson_clocks`) per frame; USB transfer (~32 ms) and GPU wake-up (0.3-1.1 ms) cost more** ([white paper](docs/whitepapers/axon-jetson-camera-inference-e2e.pdf)) ✅ |
 | Staleness bound | sum of 7 explicit terms | deterministic formula (§5) ✅ |
 | 1kHz RT worst-case jitter | < 100µs | Jetson Xavier, PREEMPT_RT + isolated CPUs: 133 / 226 µs (idle / load) at 30 W, 74 / 148 µs at MAXN; RT without isolation keeps 1.1-1.2 ms spikes ([§7](docs/hardware-verification.md)) 🟡 |
 
@@ -238,6 +239,22 @@ the same frame as a host view **and** a CUDA device pointer — no copy anywhere
 
 Reproduce with [`examples/jetson_camera/`](examples/jetson_camera/README.md); every step is in
 [docs/hardware-verification.md §6](docs/hardware-verification.md#6-jetson--camera--cuda-zero-copy-via-nvbufsurface-agx-xavier-).
+
+**Camera → inference, end to end — for small hand-mounted cameras.** The same board and camera
+feed a ResNet-18 (TensorRT FP16) in another process, zero-copy against the usual copy path
+(driver buffer → `memcpy` → host-to-device copy), timed stage by stage over 1,200 frames per cell.
+White paper (7 pages, PDF): **[Small cameras, big costs](docs/whitepapers/axon-jetson-camera-inference-e2e.pdf)**.
+
+| received → inferred, p50 (GPU kept warm) | zero-copy | copy |
+|---|---|---|
+| default clocks (30 W) | **11.06 ms** | 11.49 ms |
+| `jetson_clocks` | **1.75 ms** | 1.95 ms |
+
+Zero-copy saves exactly the H2D copy of the 614 KB frame, and nothing else. Two costs are larger:
+the USB 2.0 transfer of the frame (~32 ms between its V4L2 timestamp and the frame being
+available) and the GPU waking up after the idle gap between 30 fps frames (0.9-1.1 ms at
+default clocks). For a hand with several cameras the copy saving scales with the camera count;
+the camera link and the GPU clock policy matter more. Code: [`examples/jetson_e2e/`](examples/jetson_e2e/README.md).
 
 > Numbers are machine-specific — reproduce with `benchmarks/mock/mock_compare.py` and the
 > `instrumentation/` suite (all resource-bounded so they won't freeze the box).

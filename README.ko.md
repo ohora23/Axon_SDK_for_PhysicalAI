@@ -156,6 +156,7 @@ flowchart LR
 | RT 중 page fault | **0** | **0 / frame** (프레임 20배에도 평평) ✅ |
 | GPU zero-copy import | 실제 하드웨어 | **RTX 5080: 200/200 프레임, 복사 0, 1.68 GB** ✅ |
 | 센서 → 가속기, 복사 없음 | 실제 보드 + 실제 센서 | **AGX Xavier + UVC 웹캠: host == CUDA view 30/30 프레임, staleness ~0.5 ms** ✅ |
+| 카메라 → 추론 end-to-end | 실제 보드 + 실제 카메라 | **AGX Xavier, UVC 640×480 → ResNet-18 TensorRT: 복사 0회는 H2D 복사를 없앰, 프레임당 0.43 ms(기본 클럭) / 0.20 ms(`jetson_clocks`). USB 전송(약 32 ms)과 GPU 깨움(0.3~1.1 ms)이 더 큼** ([백서](docs/whitepapers/axon-jetson-camera-inference-e2e.pdf)) ✅ |
 | Staleness 한계 | 명시적 7개 항의 합 | 결정적 산식 (§5) ✅ |
 | 1kHz RT 최악 지터 | < 100µs | Jetson Xavier, PREEMPT_RT + CPU 격리: 30 W에서 무부하/부하 133/226 µs, MAXN에서 74/148 µs. 격리 없는 RT는 1.1~1.2 ms 튐이 남음([§7](docs/hardware-verification.md)) 🟡 |
 
@@ -219,6 +220,15 @@ ROS2(rclpy)는 같은 데이터를 옮기는 데 **캐시미스 8.6배**, **명�
 | 보드에서 라이브러리 테스트 | ctest **9/9**, `test_nvbuf_pool` 10/10회 반복 |
 
 재현: [`examples/jetson_camera/`](examples/jetson_camera/README.md), 단계별 근거: [docs/hardware-verification.md §6](docs/hardware-verification.md#6-jetson--camera--cuda-zero-copy-via-nvbufsurface-agx-xavier-).
+
+**카메라 → 추론 end-to-end — 손에 다는 소형 카메라를 위한 참고 자료.** 같은 보드와 카메라로 다른 프로세스의 ResNet-18(TensorRT FP16)에 프레임을 넘기고, 복사 0회 경로와 일반적인 복사 경로(드라이버 버퍼 → `memcpy` → H2D 복사)를 단계별로 쟀다(셀당 1,200프레임). 백서(영문 7쪽, PDF): **[Small cameras, big costs](docs/whitepapers/axon-jetson-camera-inference-e2e.pdf)**.
+
+| 수신 → 추론 끝, p50 (GPU 예열) | 복사 0회 | 복사 |
+|---|---|---|
+| 기본 클럭(30 W) | **11.06 ms** | 11.49 ms |
+| `jetson_clocks` | **1.75 ms** | 1.95 ms |
+
+복사 0회는 614 KB 프레임의 H2D 복사만 정확히 없앤다. 더 큰 비용은 두 가지다. 프레임의 USB 2.0 전송(V4L2 타임스탬프부터 프레임이 준비될 때까지 약 32 ms)과, 30 fps 프레임 사이에 쉬던 GPU가 깨어나는 비용(기본 클럭에서 0.9~1.1 ms)이다. 손에 카메라를 여러 대 달면 복사 절감은 대수만큼 커지지만, 카메라 연결 방식과 GPU 클럭 정책이 더 중요하다. 코드: [`examples/jetson_e2e/`](examples/jetson_e2e/README.md).
 
 > 수치는 머신 종속적 — `benchmarks/mock/mock_compare.py`와 `instrumentation/` 스위트로 재현 가능(모두 리소스 제한되어 PC를 얼리지 않음).
 

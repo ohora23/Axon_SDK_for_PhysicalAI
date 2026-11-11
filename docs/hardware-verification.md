@@ -187,6 +187,9 @@ rejects index 0 until it is set to 1; JetPack 5 ships cmake 3.16 (axon needs ≥
 
 ### Camera → inference, end to end (zero-copy against a copy path)
 
+White paper: [Small cameras, big costs](whitepapers/axon-jetson-camera-inference-e2e.pdf) (PDF, built from
+[`whitepapers/jetson-camera-e2e/`](whitepapers/jetson-camera-e2e/)).
+
 [`examples/jetson_e2e`](../examples/jetson_e2e/) feeds the same camera to a ResNet-18
 (TensorRT 8.5, FP16, 224×224) in another process, either straight from the `NvBufSurface`
 pool (zerocopy: the driver writes each frame into the pool slot, no user-space copy) or through

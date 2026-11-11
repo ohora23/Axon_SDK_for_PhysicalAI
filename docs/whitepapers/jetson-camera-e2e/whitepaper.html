@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Small cameras, big costs: camera-to-inference latency on Jetson AGX Xavier</title>
+<style>
+  @page { size: A4; margin: 18mm 17mm 18mm 17mm; }
+  body { font-family: "DejaVu Serif", Georgia, serif; font-size: 10pt; line-height: 1.45; color: #1a1a1a; }
+  h1 { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 18pt; line-height: 1.2; margin: 0 0 4pt; }
+  h2 { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 12.5pt; margin: 16pt 0 5pt; border-bottom: 0.6pt solid #999; padding-bottom: 2pt; }
+  h3 { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 10.5pt; margin: 11pt 0 3pt; }
+  .sub { font-family: "DejaVu Sans", Arial, sans-serif; color: #444; font-size: 10.5pt; margin-bottom: 2pt; }
+  .meta { font-family: "DejaVu Sans", Arial, sans-serif; color: #666; font-size: 8.5pt; margin-bottom: 10pt; }
+  .abstract { background: #f3f5f7; border-left: 3pt solid #1f6fb2; padding: 7pt 10pt; margin: 8pt 0 6pt; }
+  .key { border: 0.6pt solid #1f6fb2; padding: 6pt 10pt; margin: 8pt 0; }
+  .key li { margin: 2pt 0; }
+  table { border-collapse: collapse; width: 100%; font-family: "DejaVu Sans", Arial, sans-serif; font-size: 8.3pt; margin: 6pt 0 4pt; page-break-inside: avoid; }
+  th, td { border-bottom: 0.4pt solid #bbb; padding: 2.5pt 4pt; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { border-bottom: 0.9pt solid #333; }
+  table.kv td, table.kv th, table.impl td, table.impl th { text-align: left; }
+  tr.total td { font-weight: bold; border-top: 0.8pt solid #333; }
+  .cap { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 8.3pt; color: #444; margin: 2pt 0 10pt; }
+  figure { margin: 8pt 0; page-break-inside: avoid; }
+  figure img { width: 100%; }
+  code { font-family: "DejaVu Sans Mono", monospace; font-size: 8.6pt; }
+  pre { font-family: "DejaVu Sans Mono", monospace; font-size: 7.8pt; background: #f6f6f6; padding: 5pt 7pt; white-space: pre-wrap; page-break-inside: avoid; }
+  .note { font-size: 8.8pt; color: #333; }
+  .pb { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<h1>Small cameras, big costs</h1>
+<div class="sub">Camera-to-inference latency on NVIDIA Jetson AGX Xavier with a USB 2.0 UVC camera:
+zero-copy against a copy path, measured stage by stage</div>
+<div class="meta">axon SDK (github.com/ohora23/Axon_SDK_for_PhysicalAI) · measured 2026-11-11 on hermes-head ·
+code <code>examples/jetson_e2e</code>, runner <code>instrumentation/jetson/e2e/run_e2e.sh</code>,
+raw data <code>instrumentation/jetson/e2e/results/</code> · PR #60</div>
+
+<div class="abstract">
+<b>Abstract.</b> Robot hands and grippers increasingly carry small UVC cameras: USB 2.0, 640×480,
+30 fps. We measured where the time goes between such a camera and a neural network on an
+embedded GPU, frame by frame, for two pipelines that differ only in how the frame reaches the
+GPU: <i>zero-copy</i>, where the driver writes the frame into a buffer the GPU can read directly
+(axon <code>NvBufSurface</code> pool), and <i>copy</i>, the usual path (driver buffer →
+<code>memcpy</code> into shared memory → host-to-device copy). On a Jetson AGX Xavier with a
+ResNet-18 TensorRT engine, zero-copy saves the host-to-device copy, and nothing else: 0.43 ms per frame at
+the default power settings and 0.20 ms with locked clocks (4 % and 10 % of receive-to-inference).
+Two other costs are larger: the GPU waking up after the idle gap between 30 fps frames
+(0.9–1.1 ms at default clocks) and the USB 2.0 transfer of the frame itself (about 32 ms).
+Our first reading of the data attributed the wake-up cost to slow GPU reads of the camera buffer;
+a control experiment refuted it, and we report both.
+</div>
+
+<div class="key"><b>Key findings</b>
+<ul>
+<li><b>Zero-copy removes the H2D copy and nothing else</b>: 423 → 0 µs (default clocks), 184 → 0 µs
+(<code>jetson_clocks</code>) per 614 KB frame. The pre-processing kernel runs equally fast on the camera
+buffer and on <code>cudaMalloc</code> memory (234 vs 237 µs; 60 vs 62 µs).</li>
+<li><b>GPU wake-up costs more than the copy.</b> At 30 fps the GPU idles about 30 ms per frame; the
+first GPU operation afterwards pays 0.9–1.1 ms (default clocks) or 0.3–0.35 ms (locked clocks).</li>
+<li><b>The camera dominates end to end.</b> 32–36 ms pass between the frame's V4L2 timestamp (first USB
+packet) and the frame being available, for both pipelines.</li>
+<li><b>GPU clock sets inference time</b>: 10.8 ms at the default 30 W mode against 1.7 ms with
+<code>jetson_clocks</code>, for the same engine.</li>
+<li>For a hand with several cameras the copy cost scales with the camera count (0.2–0.4 ms each,
+per frame), while the camera and wake-up costs do not shrink with zero-copy.</li>
+</ul></div>
+
+<h2>1. Why small cameras</h2>
+<p>Manipulation increasingly relies on cameras mounted on the hand: wrist and palm cameras give
+close-range views of contact that a head camera cannot. These cameras are small, cheap and
+almost always UVC devices on USB 2.0, delivering YUYV or MJPEG at VGA resolution and 30 fps. The
+compute that consumes them is often an embedded GPU on the robot (Jetson class), shared with
+control and other perception. Two questions follow for a system designer: how much of the
+camera-to-decision latency can the software path still remove, and where does the rest go?</p>
+<p>axon is an inter-process transport that hands frames between processes without copying the
+payload: producers write into a shared buffer pool and publish only a small descriptor. On
+Jetson it can pool <code>NvBufSurface</code> buffers, which a UVC driver can fill directly and which
+CUDA can map, so a consumer process gets the frame as a GPU pointer with no copy in user space
+(§6 of <code>docs/hardware-verification.md</code>). This paper measures what that buys in a complete
+camera → pre-processing → inference loop.</p>
+
+<h2>2. Setup</h2>
+<table class="kv">
+<thead><tr><th>Item</th><th>Configuration</th></tr></thead>
+<tbody>
+<tr><td>Board</td><td>NVIDIA Jetson AGX Xavier, L4T R35.6 (JetPack 5.1), CUDA 11.4, TensorRT 8.5.2, cuDNN 8.6</td></tr>
+<tr><td>Kernel</td><td>PREEMPT_RT <code>5.10.216-rt108-tegra</code>, CPUs 4–7 isolated (<code>isolcpus=managed_irq,domain,4-7 irqaffinity=0-3 kthread_cpus=0-3</code>)</td></tr>
+<tr><td>Power</td><td><code>MODE_30W_ALL</code> (CPU 1.19 GHz; GPU devfreq 115–905 MHz); a second set with <code>jetson_clocks</code> (GPU fixed at 905 MHz, EMC fixed)</td></tr>
+<tr><td>Camera</td><td>Logitech Webcam Pro 9000 (UVC, USB 2.0 high speed), 640×480 YUYV, 30 fps, 614 KB per frame</td></tr>
+<tr><td>Network</td><td>ResNet-18 (ONNX model zoo <code>resnet18-v1-7</code>), TensorRT FP16 engine, input 1×3×224×224; <code>trtexec</code> alone: 1.60 ms median</td></tr>
+<tr><td>Placement</td><td>consumer (pre-processing + inference) pinned to isolated CPU 4; producer on CPUs 0–3</td></tr>
+<tr><td>Sample</td><td>per cell 2 runs × 600 timed frames (after 30 warm-up frames) = 1,200 frames; no frame skipped, no seqlock retry</td></tr>
+</tbody></table>
+
+<h3>Two pipelines</h3>
+<figure>
+<svg viewBox="0 0 760 210" xmlns="http://www.w3.org/2000/svg" font-family="DejaVu Sans, Arial" font-size="12">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text x="10" y="22" font-weight="bold" fill="#1f6fb2">zero-copy</text>
+  <g fill="none" stroke="#555" stroke-width="1.2">
+    <rect x="10" y="32" width="110" height="44" rx="6"/><rect x="160" y="32" width="170" height="44" rx="6" stroke="#1f6fb2" stroke-width="2"/>
+    <rect x="370" y="32" width="120" height="44" rx="6"/><rect x="530" y="32" width="100" height="44" rx="6"/><rect x="660" y="32" width="90" height="44" rx="6"/>
+    <path d="M120 54H158" marker-end="url(#a)"/><path d="M330 54H368" marker-end="url(#a)"/><path d="M490 54H528" marker-end="url(#a)"/><path d="M630 54H658" marker-end="url(#a)"/>
+  </g>
+  <text x="65" y="51" text-anchor="middle">UVC camera</text><text x="65" y="67" text-anchor="middle" font-size="10" fill="#555">USB 2.0</text>
+  <text x="245" y="51" text-anchor="middle">NvBufSurface slot</text><text x="245" y="67" text-anchor="middle" font-size="10" fill="#555">driver writes; CPU + GPU map it</text>
+  <text x="430" y="51" text-anchor="middle">descriptor</text><text x="430" y="67" text-anchor="middle" font-size="10" fill="#555">axon publish</text>
+  <text x="580" y="51" text-anchor="middle">pre-process</text><text x="580" y="67" text-anchor="middle" font-size="10" fill="#555">CUDA kernel</text>
+  <text x="705" y="51" text-anchor="middle">TensorRT</text><text x="705" y="67" text-anchor="middle" font-size="10" fill="#555">ResNet-18</text>
+  <text x="10" y="122" font-weight="bold" fill="#c4651c">copy</text>
+  <g fill="none" stroke="#555" stroke-width="1.2">
+    <rect x="10" y="132" width="110" height="44" rx="6"/><rect x="140" y="132" width="110" height="44" rx="6"/><rect x="270" y="132" width="120" height="44" rx="6"/>
+    <rect x="410" y="132" width="100" height="44" rx="6" stroke="#c4651c" stroke-width="2"/><rect x="530" y="132" width="100" height="44" rx="6"/><rect x="660" y="132" width="90" height="44" rx="6"/>
+    <path d="M120 154H138" marker-end="url(#a)"/><path d="M250 154H268" marker-end="url(#a)"/><path d="M390 154H408" marker-end="url(#a)"/><path d="M510 154H528" marker-end="url(#a)"/><path d="M630 154H658" marker-end="url(#a)"/>
+  </g>
+  <text x="65" y="151" text-anchor="middle">UVC camera</text><text x="65" y="167" text-anchor="middle" font-size="10" fill="#555">USB 2.0</text>
+  <text x="195" y="151" text-anchor="middle">V4L2 MMAP</text><text x="195" y="167" text-anchor="middle" font-size="10" fill="#555">driver buffer</text>
+  <text x="330" y="151" text-anchor="middle">memcpy → pool</text><text x="330" y="167" text-anchor="middle" font-size="10" fill="#555">host shared memory</text>
+  <text x="460" y="151" text-anchor="middle">H2D copy</text><text x="460" y="167" text-anchor="middle" font-size="10" fill="#555">pageable</text>
+  <text x="580" y="151" text-anchor="middle">pre-process</text><text x="580" y="167" text-anchor="middle" font-size="10" fill="#555">same kernel</text>
+  <text x="705" y="151" text-anchor="middle">TensorRT</text><text x="705" y="167" text-anchor="middle" font-size="10" fill="#555">same engine</text>
+  <text x="10" y="200" font-size="10" fill="#555">Producer and consumer are separate processes in both pipelines; only the frame's route to the GPU differs.</text>
+</svg>
+<div class="cap">Figure 1. The two pipelines. Both use axon to publish the frame descriptor to the consumer process.</div>
+</figure>
+
+<h2>3. Method</h2>
+<p><b>Timestamps.</b> Every frame carries six timestamps, all on <code>CLOCK_MONOTONIC_RAW</code>:
+the capture time (the V4L2 buffer timestamp, which uvcvideo takes on <code>CLOCK_MONOTONIC</code> when the
+frame's first USB packet arrives; converted with the offset between the two clocks read at
+dequeue), publish, received by the consumer, frame available on the GPU, pre-processing done
+and inference done. Each GPU step is followed by a stream synchronisation, so its time is
+measured from the host. The capture-time conversion and the derived publish time
+(<code>received − staleness</code>) are accurate to well under 1 µs over these intervals.</p>
+<p><b>Stages.</b> <i>H2D</i> is zero for zero-copy (the frame is already GPU-addressable) and a
+pageable <code>cudaMemcpyAsync</code> + sync for copy. The pre-processing kernel converts YUYV to RGB
+(BT.601), resizes to 224×224 (nearest) and normalises; inference is <code>enqueueV3</code> + sync.
+<i>Received → inferred</i> is the consumer-side cost a transport choice can change; <i>capture →
+inferred</i> adds the camera and the producer.</p>
+<p><b>GPU warm-up.</b> At 30 fps the GPU is idle for most of each frame period. With
+<code>E2E_WARM_GPU=1</code> the consumer runs a tiny kernel and synchronises after a frame is announced
+and before it is read, so the first timed GPU step does not also pay for waking the GPU. The
+warm-up time therefore appears in <i>publish → received</i>. §5 explains why this matters.</p>
+<p><b>Runs.</b> The two modes alternate within each repetition (zero-copy, copy, zero-copy,
+copy) so slow drift affects both. Four cells: {default clocks, <code>jetson_clocks</code>} ×
+{warm-up, no warm-up}.</p>
+
+<h2 class="pb">4. Results</h2>
+<h3>4.1 With the GPU woken before each frame</h3>
+<table>
+<thead><tr><th>stage, µs: p50 (p99)</th><th>zero-copy</th><th>copy</th><th>zero-copy, jetson_clocks</th><th>copy, jetson_clocks</th></tr></thead>
+<tbody>
+<tr><td>capture → publish</td><td>32,097 (36,164)</td><td>32,204 (36,315)</td><td>32,092 (36,155)</td><td>32,194 (36,273)</td></tr>
+<tr><td>publish → received (incl. warm-up)</td><td>1,173 (1,294)</td><td>1,181 (1,297)</td><td>464 (573)</td><td>474 (585)</td></tr>
+<tr><td>H2D copy</td><td>0 (0)</td><td>423 (504)</td><td>0 (0)</td><td>184 (263)</td></tr>
+<tr><td>pre-processing kernel</td><td>234 (275)</td><td>237 (276)</td><td>60 (109)</td><td>62 (139)</td></tr>
+<tr><td>inference</td><td>10,820 (10,892)</td><td>10,819 (10,874)</td><td>1,684 (1,730)</td><td>1,689 (1,752)</td></tr>
+<tr class="total"><td>received → inferred</td><td>11,056 (11,134)</td><td>11,486 (11,575)</td><td>1,746 (1,800)</td><td>1,947 (2,115)</td></tr>
+<tr><td>capture → inferred</td><td>44,361 (48,489)</td><td>44,896 (49,048)</td><td>34,334 (38,440)</td><td>34,646 (38,782)</td></tr>
+</tbody></table>
+<div class="cap">Table 1. 1,200 frames per cell. Zero-copy saves 430 µs (3.7 %) and 201 µs (10.3 %) of
+received → inferred; 535 µs and 312 µs of capture → inferred, which also includes the copy
+producer's <code>memcpy</code> (about 0.1 ms, inside capture → publish).</div>
+
+<figure><img src="figures/fig2_breakdown.svg" alt="Median stage breakdown">
+<div class="cap">Figure 2. Median received → inferred, split by stage. The only difference between the
+bars of a panel is the H2D copy.</div></figure>
+
+<figure><img src="figures/fig3_cdf.svg" alt="CDF of received to inferred">
+<div class="cap">Figure 3. Distribution of received → inferred over 1,200 frames per curve. The curves are
+narrow (p99 within 0.1–0.2 ms of p50); zero-copy is shifted left by the H2D time.</div></figure>
+
+<h3>4.2 Without the warm-up</h3>
+<table>
+<thead><tr><th>stage, µs: p50</th><th>zero-copy</th><th>copy</th><th>zero-copy, jetson_clocks</th><th>copy, jetson_clocks</th></tr></thead>
+<tbody>
+<tr><td>publish → received</td><td>106</td><td>109</td><td>104</td><td>111</td></tr>
+<tr><td>H2D copy</td><td>0</td><td>1,338</td><td>0</td><td>499</td></tr>
+<tr><td>pre-processing kernel</td><td>1,164</td><td>245</td><td>379</td><td>65</td></tr>
+<tr><td>inference</td><td>10,845</td><td>10,838</td><td>1,693</td><td>1,698</td></tr>
+<tr class="total"><td>received → inferred</td><td>12,010</td><td>12,427</td><td>2,077</td><td>2,271</td></tr>
+</tbody></table>
+<div class="cap">Table 2. Same setup, no warm-up (<code>*_nowarm</code>). Whichever GPU step comes first after
+the idle gap is about 0.9 ms (default) or 0.3 ms (jetson_clocks) slower than in Table 1.</div>
+
+<figure><img src="figures/fig4_wake.svg" alt="Where the GPU wake-up cost lands">
+<div class="cap">Figure 4. Medians of publish → received, H2D and kernel, with and without the warm-up. The
+wake-up cost moves: onto the kernel (zero-copy) or the H2D copy (copy) without warm-up, into
+publish → received with it. Its size barely changes.</div></figure>
+
+<h2>5. Analysis</h2>
+<h3>5.1 Zero-copy saves the copy, and nothing else</h3>
+<p>With the GPU awake, the two pipelines differ in exactly one stage. The H2D copy of a 614 KB
+frame from pageable memory takes 423 µs at the default clocks (1.45 GB/s) and 184 µs with locked
+clocks (3.3 GB/s); zero-copy removes it. The pre-processing kernel reads the
+<code>NvBufSurface</code> as fast as a <code>cudaMalloc</code> buffer (234 vs 237 µs, 60 vs 62 µs), so no
+cost appears elsewhere. Inference is identical. The saving is 4 % of received → inferred at the
+default clocks and 10 % with locked clocks, where inference is shorter and the copy weighs more.</p>
+
+<h3>5.2 Waking the GPU costs more than the copy</h3>
+<p>Without the warm-up (Table 2), the first GPU operation of each frame is slower by about
+0.9–1.1 ms at the default clocks and 0.3–0.35 ms with <code>jetson_clocks</code>: the kernel in the
+zero-copy pipeline, the H2D copy in the copy pipeline. The same amount reappears in publish →
+received when the warm-up runs there (1,173 vs 106 µs; 464 vs 104 µs). The GPU is idle for
+about 30 ms of every 33 ms frame period and resumes slowly; locking the clocks shortens but
+does not remove the effect.</p>
+<p><b>A retracted reading.</b> Our first analysis used only the no-warm-up runs and concluded that
+the kernel reads the camera buffer 4.7× slower than device memory (1,164 vs 245 µs). A reviewer
+noticed that in the locked-clock copy runs, the 87 frames whose H2D copy was unusually short had
+a kernel time of 376 µs on <code>cudaMalloc</code> memory, the same as the zero-copy kernel. That
+pointed at a first-operation cost, not at the memory. The warm-up experiment confirmed it. For
+measurements of GPU pipelines at camera rates, the first GPU step after an idle gap should be
+treated as a separate stage or controlled for.</p>
+
+<h3>5.3 The camera dominates</h3>
+<p>Between the V4L2 timestamp and the frame being ready to publish, 32–36 ms pass in both
+pipelines (p50 32.1 ms, p99 36.2–36.3 ms). uvcvideo stamps a frame when its first USB packet
+arrives (<code>hwtimestamps=0</code>), so this interval is the USB 2.0 transfer of the frame; the
+sensor exposure happened earlier and is not included. Compared with this, all consumer-side
+costs at locked clocks add up to 1.7–1.9 ms.</p>
+
+<h3>5.4 GPU clock sets inference time</h3>
+<p>The same engine takes 10.8 ms at the default 30 W mode (devfreq lets the GPU drop to 115 MHz
+between frames) and 1.7 ms with <code>jetson_clocks</code> (905 MHz), close to the 1.6 ms that
+<code>trtexec</code> reports when it keeps the GPU busy. For latency-sensitive perception at camera
+rates, the GPU clock policy matters more than the transport.</p>
+
+<h3>5.5 Transport latency</h3>
+<p>Publish → received without the warm-up, about 106 µs, is mostly the 100 µs polling interval of
+axon's <code>wait_for_update</code> on this build: the JetPack 5 kernel headers lack
+<code>futex_waitv</code>, so the wait falls back to polling. On kernels ≥ 5.16 with matching headers
+the wait is futex-based.</p>
+
+<h2>6. Implications for hand-mounted cameras</h2>
+<table class="impl">
+<thead><tr><th>Observation</th><th>Design implication</th></tr></thead>
+<tbody>
+<tr><td style="text-align:left">USB 2.0 transfer ≈ 32 ms of a ~44 ms (default) or ~34 ms (locked) capture → inferred</td>
+<td style="text-align:left">Latency targets below ~35 ms need a different camera link: lower resolution, MJPEG (less to transfer; decode on Jetson's NVJPG) or USB 3 / CSI cameras. Software cannot recover this part.</td></tr>
+<tr><td style="text-align:left">Zero-copy saves 0.2–0.4 ms per frame per camera</td>
+<td style="text-align:left">Worth it per camera, and it adds up: four hand cameras sharing one GPU would save about 0.8–1.7 ms per cycle in H2D time alone (arithmetic, not measured), plus the CPU <code>memcpy</code> (~0.1 ms each) and the memory traffic.</td></tr>
+<tr><td style="text-align:left">GPU wake-up 0.3–1.1 ms per frame at 30 fps</td>
+<td style="text-align:left">Keep the GPU clock up for low-rate perception (<code>jetson_clocks</code>, or a steady background load), the GPU analogue of keeping a CPU out of deep idle (axon's <code>CpuLatencyHold</code>).</td></tr>
+<tr><td style="text-align:left">Timestamp = first USB packet</td>
+<td style="text-align:left">When fusing with proprioception (joint encoders, tactile), shift the camera time back by the exposure and readout the timestamp does not include.</td></tr>
+<tr><td style="text-align:left">Consumer on an isolated CPU; no frame skipped in 9,600 frames</td>
+<td style="text-align:left">Pin the perception consumer away from I/O and other inference; see the RT section of <code>docs/hardware-verification.md</code> §7.</td></tr>
+</tbody></table>
+
+<h2>7. Limitations</h2>
+<ul>
+<li>One camera, one resolution (640×480 YUYV), one frame rate (30 fps), one board. Larger frames
+make the H2D copy, and so the zero-copy saving, proportionally larger; a RealSense run is planned.</li>
+<li>The copy baseline uses pageable host memory. Pinned memory, or mapped (zero-copy) host
+memory on the integrated GPU, would shorten or remove the H2D copy without axon's
+<code>NvBufSurface</code> pool; they were not measured.</li>
+<li>No ROS 2 baseline on the board (ROS 2 is not installed on it); the copy path stands in for a
+conventional pipeline.</li>
+<li>The exposure time and the true glass-to-inference latency are not measured; that needs an
+external light source or display in view of the camera.</li>
+<li>The kernel uses BT.601 full-range coefficients while the camera reports limited range. This
+shifts colours, not timing.</li>
+<li>Two runs per cell. The per-frame distributions are narrow (Figure 3), but run-to-run
+variation beyond two runs is not characterised.</li>
+</ul>
+
+<h2>8. Reproduce</h2>
+<pre>cmake -S . -B build -DAXON_ENABLE_JETSON=ON -DAXON_WITH_CUDA=ON &amp;&amp; cmake --build build -j
+/usr/src/tensorrt/bin/trtexec --onnx=resnet18-v1-7.onnx --fp16 --saveEngine=resnet18_fp16.engine
+E2E_WARM_GPU=1 instrumentation/jetson/e2e/run_e2e.sh build resnet18_fp16.engine 600 2 my_run
+sudo jetson_clocks --store clocks.conf &amp;&amp; sudo jetson_clocks          # locked-clock cells
+E2E_WARM_GPU=1 instrumentation/jetson/e2e/run_e2e.sh build resnet18_fp16.engine 600 2 my_run_jc
+sudo jetson_clocks --restore clocks.conf
+python3 docs/whitepapers/jetson-camera-e2e/make_figures.py       # figures + numbers.json</pre>
+<p class="note">Raw data: <code>instrumentation/jetson/e2e/results/{default,jetson_clocks}_{warm,nowarm}/</code>,
+one CSV row per frame (<code>seq,t_cap,t_pub,t_view,t_gpu,t_pre,t_inf,top1,seqlock_retries</code>),
+consumer summaries, producer logs and <code>env.txt</code> (kernel, power mode, isolated CPUs, camera
+format, GPU clocks, warm-up setting; the <code>*_nowarm</code> runs predate the clock record). Every
+number in this paper is computed by <code>make_figures.py</code> into <code>numbers.json</code>.</p>
+
+</body>
+</html>

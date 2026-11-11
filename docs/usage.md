@@ -8,6 +8,7 @@ section.
 - Depth frame with padding + v2 metadata → [`examples/depth_filter/depth_filter_demo.cpp`](../examples/depth_filter/depth_filter_demo.cpp)
 - Cross-process **GPU** zero-copy (R6) → [`examples/accelerator_pool/accelerator_pool_demo.cpp`](../examples/accelerator_pool/accelerator_pool_demo.cpp)
 - Python (zero-copy NumPy) → [`python/tests/test_axon.py`](../python/tests/test_axon.py)
+- Small hand-mounted UVC cameras on Jetson: what to optimise → [§5](#small-hand-mounted-cameras-wrist-palm-finger-what-to-optimise)
 
 The mental model in one line: the **producer** owns a pool of shared buffers,
 writes each frame straight into a pooled buffer, and publishes a tiny
@@ -397,6 +398,33 @@ established each step is in [hardware-verification §6](hardware-verification.md
 
 The pool handshake carries a per-buffer import blob for this backend, which is why the
 wire version is **4**.
+
+### Small hand-mounted cameras (wrist, palm, finger): what to optimise
+
+Wrist and palm cameras are often USB 2.0 UVC devices at 640×480, 30 fps. For one such camera
+feeding a ResNet-18 (TensorRT FP16) on AGX Xavier, measured stage by stage in the white paper
+[Small cameras, big costs](whitepapers/axon-jetson-camera-inference-e2e.pdf), the costs rank
+like this:
+
+| Cost per frame (p50) | Size | What to do |
+|---|---|---|
+| V4L2 timestamp → frame available (USB 2.0 transfer + driver dequeue) | ~32 ms | The largest term, and no transport can remove it. Below ~35 ms camera-to-decision you need a different camera: USB 3 or CSI, a higher frame rate, or, if link bandwidth is the limit (not established), lower resolution or MJPEG decoded on NVJPG. |
+| Inference, default 30 W clocks vs `jetson_clocks` | 10.8 vs 1.7 ms | Clock policy matters more than transport for low-rate perception. |
+| First GPU operation after the ~30 ms idle between frames | 0.9-1.1 ms (default) / 0.3-0.36 ms (locked) | Lock the clocks, or launch a tiny kernel before the frame arrives (`E2E_WARM_GPU=1` in the example). It moves the cost off the critical path; it does not remove it. Same idea as `CpuLatencyHold` on the CPU side. |
+| H2D copy of the 614 KB frame (pageable memory) | 0.43 ms (default) / 0.20 ms (locked) | Removed by the `NvBufSurface` pool above; the pre-processing kernel reads the camera buffer as fast as `cudaMalloc` memory. Scales with the camera count: four cameras ≈ 0.8-1.7 ms per cycle (arithmetic), plus the CPU `memcpy`. |
+
+Two more points when fusing with proprioception and control:
+
+- uvcvideo stamps the frame when its **first USB packet** arrives; exposure and readout happen
+  before that. Shift the camera time back by them when aligning with joint encoders or tactile
+  sensors.
+- Put the perception consumer on an isolated CPU, away from I/O and other inference
+  ([hardware-verification §7](hardware-verification.md#7-1-khz-rt-jitter-on-the-jetson-agx-xavier-)); no frame was skipped in 9,600 frames
+  that way.
+
+Reproduce with [`examples/jetson_e2e/`](../examples/jetson_e2e/README.md) and
+`instrumentation/jetson/e2e/run_e2e.sh`. Limits: one camera, one board, pageable-memory copy
+baseline (pinned or mapped host memory not measured).
 
 ---
 

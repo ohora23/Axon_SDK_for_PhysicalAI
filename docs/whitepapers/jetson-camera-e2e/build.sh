@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 python3 make_figures.py > /dev/null
-CHROME=$(command -v google-chrome || command -v chromium || command -v chromium-browser)
+CHROME=$(command -v google-chrome || command -v chromium || command -v chromium-browser) || { echo "need google-chrome or chromium" >&2; exit 1; }
 "$CHROME" --headless=new --disable-gpu --no-pdf-header-footer \
-  --print-to-pdf=../axon-jetson-camera-inference-e2e.pdf "file://$PWD/whitepaper.html" 2>/dev/null
+  --print-to-pdf=../axon-jetson-camera-inference-e2e.pdf "file://$PWD/whitepaper.html"
 echo "../axon-jetson-camera-inference-e2e.pdf"

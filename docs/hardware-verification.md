@@ -216,20 +216,20 @@ it lands in publish → received, outside the frame-processing stages below):
   kernel takes the same time on the `NvBufSurface` as on a `cudaMalloc` buffer.
 - **Waking the GPU costs more than the copy.** The GPU idles between 30 fps frames; the first GPU
   step after the idle pays about 0.9-1.1 ms at the default clocks and 0.3-0.35 ms with
-  `jetson_clocks`.
+  `jetson_clocks` (cause not isolated: clock ramp, power gating or the submit path).
   In the first runs (`*_nowarm`) that step was the kernel in zerocopy and the H2D copy in copy,
   so zerocopy's kernel looked 4.7× slower (1,163 against 245 µs) and copy's H2D 1,338 µs; an
   earlier version of this section read that as slow reads of the surface, which the warm runs
   rule out (the `*_nowarm` env.txt predates the clock record; the directory name is the only
   record of `jetson_clocks` there). Receive → inferred in those runs: 12,010 against 12,427 µs, 2,077 against 2,271 µs.
-  With the warm-up, publish → received grows by the same amount (1,173 µs against 106 µs at the
-  default clocks), because the warm-up runs there.
+  With the warm-up, publish → received grows by about the same amount (1,173 µs against 106 µs at
+  the default clocks), because the warm-up (and its own kernel) runs there.
 - **The camera dominates the total.** uvcvideo stamps the frame when its first USB packet
-  arrives (`hwtimestamps=0`); about 32 ms then go to the USB 2.0 transfer of the frame before it
-  can be published. The exposure happens before the timestamp and is not in these numbers.
-- **GPU clock, not the transport, sets the inference time:** 10.8 ms at the default 30 W clocks
+  arrives (`hwtimestamps=0`); about 32 ms then pass (USB 2.0 transfer plus driver dequeue; link
+  bandwidth or the camera's readout pace, not separated) before it can be published. The exposure happens before the timestamp and is not in these numbers.
+- **The clock policy, not the transport, sets the inference time:** 10.8 ms at the default 30 W clocks
   (GPU at 115 MHz when idle, devfreq up to 905 MHz) against 1.7 ms with `jetson_clocks` (905 MHz
-  fixed; `trtexec` alone: 1.6 ms).
+  fixed, memory clock locked too; `trtexec` alone: 1.6 ms).
 - publish → received without the warm-up, about 106 µs, is mostly the 100 µs polling interval of
   `wait_for_update` on this build (JetPack 5 headers have no `futex_waitv`).
 - With a higher-resolution or faster camera the H2D copy grows with the frame; a RealSense run

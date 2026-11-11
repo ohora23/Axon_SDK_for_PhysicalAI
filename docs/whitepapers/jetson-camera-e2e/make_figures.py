@@ -6,6 +6,7 @@ numbers.json next to this file. Every number in whitepaper.html comes from numbe
 """
 import csv, glob, json, os
 import matplotlib
+matplotlib.rcParams["svg.hashsalt"] = "axon"
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -34,7 +35,6 @@ data, num = {}, {}
 for c in CELLS:
     for m in MODES:
         rs = rows(c, m)
-        seqs = [int(r["seq"]) for r in rs]
         data[(c, m)] = {k: [us(r, a, b) for r in rs] for k, (a, b) in STAGES.items()}
         num[f"{c}/{m}"] = {"n": len(rs), "runs": len(glob.glob(os.path.join(RES, c, f"e2e_{m}_r*.csv"))),
                            "seqlock_retries": sum(int(r["seqlock_retries"]) for r in rs),
@@ -63,7 +63,7 @@ for ax, c, title in zip(axes, ["default_warm", "jetson_clocks_warm"], ["default 
     ax.set_xlim(0, ax.get_xlim()[1] * 1.18)
 fig.legend(*axes[0].get_legend_handles_labels(), frameon=False, fontsize=7.5, ncol=3, loc="upper center")
 fig.tight_layout(rect=(0, 0, 1, 0.9))
-fig.savefig(os.path.join(HERE, "figures", "fig2_breakdown.svg"))
+fig.savefig(os.path.join(HERE, "figures", "fig2_breakdown.svg"), metadata={"Date": None})
 
 # Fig 3: CDF of received -> inferred, warm cells
 fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.5))
@@ -76,7 +76,7 @@ for ax, c, title in zip(axes, ["default_warm", "jetson_clocks_warm"], ["default 
     ax.set_ylabel("fraction of frames")
 axes[0].legend(frameon=False, fontsize=8)
 fig.tight_layout()
-fig.savefig(os.path.join(HERE, "figures", "fig3_cdf.svg"))
+fig.savefig(os.path.join(HERE, "figures", "fig3_cdf.svg"), metadata={"Date": None})
 
 # Fig 4: where the GPU wake-up cost lands (medians, us), no warm-up vs warm-up
 fig, ax = plt.subplots(figsize=(7.2, 2.9))
@@ -97,5 +97,5 @@ ax.set_xticks(list(x), labels, fontsize=6.5)
 ax.set_ylabel("median, µs")
 fig.legend(*ax.get_legend_handles_labels(), frameon=False, fontsize=7.5, ncol=3, loc="upper center")
 fig.tight_layout(rect=(0, 0, 1, 0.9))
-fig.savefig(os.path.join(HERE, "figures", "fig4_wake.svg"))
+fig.savefig(os.path.join(HERE, "figures", "fig4_wake.svg"), metadata={"Date": None})
 print(json.dumps({k: {s: v[s]["p50"] for s in ("h2d", "kernel", "inference", "received_to_inferred", "capture_to_inferred", "publish_to_received", "capture_to_publish")} for k, v in num.items()}, indent=0))

@@ -36,19 +36,20 @@
 zero-copy against a copy path, measured stage by stage</div>
 <div class="meta">axon SDK (github.com/ohora23/Axon_SDK_for_PhysicalAI) · measured 2026-11-11 on hermes-head ·
 code <code>examples/jetson_e2e</code>, runner <code>instrumentation/jetson/e2e/run_e2e.sh</code>,
-raw data <code>instrumentation/jetson/e2e/results/</code> · PR #60</div>
+raw data <code>instrumentation/jetson/e2e/results/</code> (PR #60) · paper PR #61</div>
 
 <div class="abstract">
-<b>Abstract.</b> Robot hands and grippers increasingly carry small UVC cameras: USB 2.0, 640×480,
-30 fps. We measured where the time goes between such a camera and a neural network on an
+<b>Abstract.</b> Robot hands and grippers often carry small UVC cameras, such as USB 2.0, 640×480,
+30 fps devices. We measured where the time goes between such a camera and a neural network on an
 embedded GPU, frame by frame, for two pipelines that differ only in how the frame reaches the
 GPU: <i>zero-copy</i>, where the driver writes the frame into a buffer the GPU can read directly
 (axon <code>NvBufSurface</code> pool), and <i>copy</i>, the usual path (driver buffer →
 <code>memcpy</code> into shared memory → host-to-device copy). On a Jetson AGX Xavier with a
 ResNet-18 TensorRT engine, zero-copy saves the host-to-device copy, and nothing else: 0.43 ms per frame at
 the default power settings and 0.20 ms with locked clocks (4 % and 10 % of receive-to-inference).
-Two other costs are larger: the GPU waking up after the idle gap between 30 fps frames
-(0.9–1.1 ms at default clocks) and the USB 2.0 transfer of the frame itself (about 32 ms).
+Two other costs are larger: the first GPU operation after the idle gap between 30 fps frames
+(0.9–1.1 ms at default clocks; cause not isolated) and the interval from the frame's V4L2
+timestamp to its availability, which covers the USB 2.0 transfer (about 32 ms).
 Our first reading of the data attributed the wake-up cost to slow GPU reads of the camera buffer;
 a control experiment refuted it, and we report both.
 </div>
@@ -58,20 +59,21 @@ a control experiment refuted it, and we report both.
 <li><b>Zero-copy removes the H2D copy and nothing else</b>: 423 → 0 µs (default clocks), 184 → 0 µs
 (<code>jetson_clocks</code>) per 614 KB frame. The pre-processing kernel runs equally fast on the camera
 buffer and on <code>cudaMalloc</code> memory (234 vs 237 µs; 60 vs 62 µs).</li>
-<li><b>GPU wake-up costs more than the copy.</b> At 30 fps the GPU idles about 30 ms per frame; the
-first GPU operation afterwards pays 0.9–1.1 ms (default clocks) or 0.3–0.35 ms (locked clocks).</li>
+<li><b>The first GPU operation after idle costs more than the copy.</b> At 30 fps the GPU idles about
+30 ms per frame; the first GPU operation afterwards pays 0.9–1.1 ms (default clocks) or 0.3–0.36 ms
+(locked clocks). Clock ramp, power gating and the driver submit path were not separated.</li>
 <li><b>The camera dominates end to end.</b> 32–36 ms pass between the frame's V4L2 timestamp (first USB
-packet) and the frame being available, for both pipelines.</li>
-<li><b>GPU clock sets inference time</b>: 10.8 ms at the default 30 W mode against 1.7 ms with
-<code>jetson_clocks</code>, for the same engine.</li>
+packet) and the frame being available, for both pipelines (USB transfer plus driver dequeue).</li>
+<li><b>The clock policy sets inference time</b>: 10.8 ms at the default 30 W mode against 1.7 ms with
+<code>jetson_clocks</code> (GPU and memory clocks locked), for the same engine.</li>
 <li>For a hand with several cameras the copy cost scales with the camera count (0.2–0.4 ms each,
 per frame), while the camera and wake-up costs do not shrink with zero-copy.</li>
 </ul></div>
 
 <h2>1. Why small cameras</h2>
 <p>Manipulation increasingly relies on cameras mounted on the hand: wrist and palm cameras give
-close-range views of contact that a head camera cannot. These cameras are small, cheap and
-almost always UVC devices on USB 2.0, delivering YUYV or MJPEG at VGA resolution and 30 fps. The
+close-range views of contact that a head camera cannot. These cameras are small and cheap; many are
+UVC devices on USB 2.0, delivering YUYV or MJPEG at VGA resolution and 30 fps. The
 compute that consumes them is often an embedded GPU on the robot (Jetson class), shared with
 control and other perception. Two questions follow for a system designer: how much of the
 camera-to-decision latency can the software path still remove, and where does the rest go?</p>
@@ -171,7 +173,7 @@ bars of a panel is the H2D copy.</div></figure>
 
 <figure><img src="figures/fig3_cdf.svg" alt="CDF of received to inferred">
 <div class="cap">Figure 3. Distribution of received → inferred over 1,200 frames per curve. The curves are
-narrow (p99 within 0.1–0.2 ms of p50); zero-copy is shifted left by the H2D time.</div></figure>
+narrow (p99 within 0.2 ms of p50); zero-copy is shifted left by the H2D time.</div></figure>
 
 <h3>4.2 Without the warm-up</h3>
 <table>
@@ -189,7 +191,8 @@ the idle gap is about 0.9 ms (default) or 0.3 ms (jetson_clocks) slower than in 
 <figure><img src="figures/fig4_wake.svg" alt="Where the GPU wake-up cost lands">
 <div class="cap">Figure 4. Medians of publish → received, H2D and kernel, with and without the warm-up. The
 wake-up cost moves: onto the kernel (zero-copy) or the H2D copy (copy) without warm-up, into
-publish → received with it. Its size barely changes.</div></figure>
+publish → received with it. Its size is about the same; publish → received also carries the
+warm-up kernel itself.</div></figure>
 
 <h2>5. Analysis</h2>
 <h3>5.1 Zero-copy saves the copy, and nothing else</h3>
@@ -200,16 +203,17 @@ clocks (3.3 GB/s); zero-copy removes it. The pre-processing kernel reads the
 cost appears elsewhere. Inference is identical. The saving is 4 % of received → inferred at the
 default clocks and 10 % with locked clocks, where inference is shorter and the copy weighs more.</p>
 
-<h3>5.2 Waking the GPU costs more than the copy</h3>
+<h3>5.2 The first GPU operation after idle costs more than the copy</h3>
 <p>Without the warm-up (Table 2), the first GPU operation of each frame is slower by about
-0.9–1.1 ms at the default clocks and 0.3–0.35 ms with <code>jetson_clocks</code>: the kernel in the
-zero-copy pipeline, the H2D copy in the copy pipeline. The same amount reappears in publish →
-received when the warm-up runs there (1,173 vs 106 µs; 464 vs 104 µs). The GPU is idle for
-about 30 ms of every 33 ms frame period and resumes slowly; locking the clocks shortens but
-does not remove the effect.</p>
+0.9 ms at the default clocks and 0.32 ms with <code>jetson_clocks</code>: the kernel in the
+zero-copy pipeline, the H2D copy in the copy pipeline. About the same amount reappears in publish →
+received when the warm-up runs there (1,173 vs 106 µs; 464 vs 104 µs), slightly more because that
+stage also runs the warm-up kernel. The GPU is idle for about 30 ms of every 33 ms frame period.
+Locking the clocks shortens but does not remove the effect, so clock ramp alone does not explain
+it; power gating, the driver submit path and the idle consumer CPU were not separated.</p>
 <p><b>A retracted reading.</b> Our first analysis used only the no-warm-up runs and concluded that
 the kernel reads the camera buffer 4.7× slower than device memory (1,164 vs 245 µs). A reviewer
-noticed that in the locked-clock copy runs, the 87 frames whose H2D copy was unusually short had
+noticed that in the locked-clock copy runs, the 86 frames whose H2D copy was unusually short had
 a kernel time of 376 µs on <code>cudaMalloc</code> memory, the same as the zero-copy kernel. That
 pointed at a first-operation cost, not at the memory. The warm-up experiment confirmed it. For
 measurements of GPU pipelines at camera rates, the first GPU step after an idle gap should be
@@ -218,15 +222,19 @@ treated as a separate stage or controlled for.</p>
 <h3>5.3 The camera dominates</h3>
 <p>Between the V4L2 timestamp and the frame being ready to publish, 32–36 ms pass in both
 pipelines (p50 32.1 ms, p99 36.2–36.3 ms). uvcvideo stamps a frame when its first USB packet
-arrives (<code>hwtimestamps=0</code>), so this interval is the USB 2.0 transfer of the frame; the
-sensor exposure happened earlier and is not included. Compared with this, all consumer-side
-costs at locked clocks add up to 1.7–1.9 ms.</p>
+arrives (<code>hwtimestamps=0</code>), so this interval is the USB 2.0 transfer of the frame plus the
+driver's copy out of the USB buffers and the dequeue; the sensor exposure happened earlier and is
+not included. The distribution has two modes, near 32 ms and near 36 ms, with a floor at 32.0 ms.
+The data cannot tell whether the link bandwidth or the camera's own readout pace sets it.
+Compared with this, received → inferred at locked clocks is 1.75–1.95 ms, or about
+2.1–2.3 ms when the first-operation cost is included.</p>
 
-<h3>5.4 GPU clock sets inference time</h3>
-<p>The same engine takes 10.8 ms at the default 30 W mode (devfreq lets the GPU drop to 115 MHz
-between frames) and 1.7 ms with <code>jetson_clocks</code> (905 MHz), close to the 1.6 ms that
+<h3>5.4 The clock policy sets inference time</h3>
+<p>The same engine takes 10.8 ms at the default 30 W mode (a single devfreq read at the start of
+each run showed the GPU at 115 MHz while idle) and 1.7 ms with <code>jetson_clocks</code> (GPU at 905 MHz,
+memory clock locked too, so the GPU clock alone is not isolated), close to the 1.6 ms that
 <code>trtexec</code> reports when it keeps the GPU busy. For latency-sensitive perception at camera
-rates, the GPU clock policy matters more than the transport.</p>
+rates, the GPU and memory clock policy matters more than the transport.</p>
 
 <h3>5.5 Transport latency</h3>
 <p>Publish → received without the warm-up, about 106 µs, is mostly the 100 µs polling interval of
@@ -238,12 +246,12 @@ the wait is futex-based.</p>
 <table class="impl">
 <thead><tr><th>Observation</th><th>Design implication</th></tr></thead>
 <tbody>
-<tr><td style="text-align:left">USB 2.0 transfer ≈ 32 ms of a ~44 ms (default) or ~34 ms (locked) capture → inferred</td>
-<td style="text-align:left">Latency targets below ~35 ms need a different camera link: lower resolution, MJPEG (less to transfer; decode on Jetson's NVJPG) or USB 3 / CSI cameras. Software cannot recover this part.</td></tr>
+<tr><td style="text-align:left">Timestamp → available ≈ 32 ms of a ~44 ms (default) or ~34 ms (locked) capture → inferred</td>
+<td style="text-align:left">Latency targets below ~35 ms likely need a different camera: USB 3 or CSI, a higher frame rate, or, if the link bandwidth is the limit (not established here), lower resolution or MJPEG (decode on Jetson's NVJPG). The transport software cannot recover this part.</td></tr>
 <tr><td style="text-align:left">Zero-copy saves 0.2–0.4 ms per frame per camera</td>
 <td style="text-align:left">Worth it per camera, and it adds up: four hand cameras sharing one GPU would save about 0.8–1.7 ms per cycle in H2D time alone (arithmetic, not measured), plus the CPU <code>memcpy</code> (~0.1 ms each) and the memory traffic.</td></tr>
-<tr><td style="text-align:left">GPU wake-up 0.3–1.1 ms per frame at 30 fps</td>
-<td style="text-align:left">Keep the GPU clock up for low-rate perception (<code>jetson_clocks</code>, or a steady background load), the GPU analogue of keeping a CPU out of deep idle (axon's <code>CpuLatencyHold</code>).</td></tr>
+<tr><td style="text-align:left">First GPU operation after idle: 0.3–1.1 ms per frame at 30 fps</td>
+<td style="text-align:left">Lock the clocks for low-rate perception (<code>jetson_clocks</code> measured; a steady background load is untested), or warm the GPU before the frame arrives, the GPU analogue of keeping a CPU out of deep idle (axon's <code>CpuLatencyHold</code>).</td></tr>
 <tr><td style="text-align:left">Timestamp = first USB packet</td>
 <td style="text-align:left">When fusing with proprioception (joint encoders, tactile), shift the camera time back by the exposure and readout the timestamp does not include.</td></tr>
 <tr><td style="text-align:left">Consumer on an isolated CPU; no frame skipped in 9,600 frames</td>

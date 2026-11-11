@@ -251,7 +251,7 @@ White paper (7 pages, PDF): **[Small cameras, big costs](docs/whitepapers/axon-j
 | `jetson_clocks` | **1.75 ms** | 1.95 ms |
 
 ¹ The consumer wakes the GPU before taking each frame, which moves the cost of the first GPU
-operation after idle (≈1.1 / 0.36 ms) out of this interval; it is still paid per frame.
+operation after idle (≈0.95 / 0.33 ms; paid as ≈1.1 / 0.36 ms in publish → received) out of this interval; it is still paid per frame.
 
 Zero-copy saves exactly the H2D copy of the 614 KB frame, and nothing else. Two costs are larger:
 the ~32 ms between the frame's V4L2 timestamp and the frame being available (USB 2.0 transfer

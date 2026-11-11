@@ -410,17 +410,17 @@ like this:
 |---|---|---|
 | V4L2 timestamp → frame available (USB 2.0 transfer + driver dequeue) | ~32 ms | The largest term, and no transport can remove it. Below ~35 ms camera-to-decision you need a different camera: USB 3 or CSI, a higher frame rate, or, if link bandwidth is the limit (not established), lower resolution or MJPEG decoded on NVJPG. |
 | Inference, default 30 W clocks vs `jetson_clocks` | 10.8 vs 1.7 ms | Clock policy matters more than transport for low-rate perception. |
-| First GPU operation after the ~30 ms idle between frames | 0.9-1.1 ms (default) / 0.3-0.36 ms (locked) | Lock the clocks, or launch a tiny kernel before the frame arrives (`E2E_WARM_GPU=1` in the example). It moves the cost off the critical path; it does not remove it. Same idea as `CpuLatencyHold` on the CPU side. |
-| H2D copy of the 614 KB frame (pageable memory) | 0.43 ms (default) / 0.20 ms (locked) | Removed by the `NvBufSurface` pool above; the pre-processing kernel reads the camera buffer as fast as `cudaMalloc` memory. Scales with the camera count: four cameras ≈ 0.8-1.7 ms per cycle (arithmetic), plus the CPU `memcpy`. |
+| First GPU operation after the ~30 ms idle between frames | 0.9-1.1 ms (default) / 0.3-0.36 ms (locked) | Lock the clocks (measured). A tiny kernel launched ahead of the frame may hide it (untested); `E2E_WARM_GPU=1` in the example runs after the frame is announced, so it only moves the cost between stages and not off the capture → inferred path. Same idea as `CpuLatencyHold` on the CPU side. |
+| H2D copy of the 614 KB frame (pageable memory) | 0.42 ms (default) / 0.18 ms (locked) | Removed by the `NvBufSurface` pool above; the pre-processing kernel reads the camera buffer as fast as `cudaMalloc` memory. Scales with the camera count: four cameras ≈ 0.8-1.7 ms per cycle (arithmetic), plus the CPU `memcpy`. |
 
 Two more points when fusing with proprioception and control:
 
-- uvcvideo stamps the frame when its **first USB packet** arrives; exposure and readout happen
-  before that. Shift the camera time back by them when aligning with joint encoders or tactile
+- uvcvideo stamps the frame when its **first USB packet** arrives; exposure (and possibly part of
+  readout) happens before that. Shift the camera time back accordingly when aligning with joint encoders or tactile
   sensors.
 - Put the perception consumer on an isolated CPU, away from I/O and other inference
-  ([hardware-verification §7](hardware-verification.md#7-1-khz-rt-jitter-on-the-jetson-agx-xavier-)); no frame was skipped in 9,600 frames
-  that way.
+  ([hardware-verification §7](hardware-verification.md#7-1-khz-rt-jitter-on-the-jetson-agx-xavier-)); that was the measured setup, with no
+  frame skipped in 9,600.
 
 Reproduce with [`examples/jetson_e2e/`](../examples/jetson_e2e/README.md) and
 `instrumentation/jetson/e2e/run_e2e.sh`. Limits: one camera, one board, pageable-memory copy

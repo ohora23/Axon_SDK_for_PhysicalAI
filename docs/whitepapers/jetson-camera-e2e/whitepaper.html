@@ -230,8 +230,8 @@ Compared with this, received → inferred at locked clocks is 1.75–1.95 ms, or
 2.1–2.3 ms when the first-operation cost is included.</p>
 
 <h3>5.4 The clock policy sets inference time</h3>
-<p>The same engine takes 10.8 ms at the default 30 W mode (a single devfreq read at the start of
-each run showed the GPU at 115 MHz while idle) and 1.7 ms with <code>jetson_clocks</code> (GPU at 905 MHz,
+<p>The same engine takes 10.8 ms at the default 30 W mode (a single devfreq read before the default-clock
+warm-up cell showed the GPU at 115 MHz while idle) and 1.7 ms with <code>jetson_clocks</code> (GPU at 905 MHz,
 memory clock locked too, so the GPU clock alone is not isolated), close to the 1.6 ms that
 <code>trtexec</code> reports when it keeps the GPU busy. For latency-sensitive perception at camera
 rates, the GPU and memory clock policy matters more than the transport.</p>
@@ -251,7 +251,7 @@ the wait is futex-based.</p>
 <tr><td style="text-align:left">Zero-copy saves 0.2–0.4 ms per frame per camera</td>
 <td style="text-align:left">Worth it per camera, and it adds up: four hand cameras sharing one GPU would save about 0.8–1.7 ms per cycle in H2D time alone (arithmetic, not measured), plus the CPU <code>memcpy</code> (~0.1 ms each) and the memory traffic.</td></tr>
 <tr><td style="text-align:left">First GPU operation after idle: 0.3–1.1 ms per frame at 30 fps</td>
-<td style="text-align:left">Lock the clocks for low-rate perception (<code>jetson_clocks</code> measured; a steady background load is untested), or warm the GPU before the frame arrives, the GPU analogue of keeping a CPU out of deep idle (axon's <code>CpuLatencyHold</code>).</td></tr>
+<td style="text-align:left">Lock the clocks for low-rate perception (<code>jetson_clocks</code> measured; a steady background load is untested), or warm the GPU before the frame arrives (untested; the warm-up measured here ran after the frame was announced and only moved the cost), the GPU analogue of keeping a CPU out of deep idle (axon's <code>CpuLatencyHold</code>).</td></tr>
 <tr><td style="text-align:left">Timestamp = first USB packet</td>
 <td style="text-align:left">When fusing with proprioception (joint encoders, tactile), shift the camera time back by the exposure and readout the timestamp does not include.</td></tr>
 <tr><td style="text-align:left">Consumer on an isolated CPU; no frame skipped in 9,600 frames</td>

@@ -264,18 +264,6 @@ the camera link and the clock policy matter more. Code: [`examples/jetson_e2e/`]
 
 ---
 
-## 30-Second Demo (work in progress)
-
-```
-[ TODO: 30-second video — closed-loop mini demo ]
-[ V4L2 camera → NPU inference → 1kHz RT control loop ]
-[ Live overlay of the metrics above ]
-```
-
-Closed-loop video demo pending a real sensor + robot board; the GPU/RT data path it exercises is already measured on this dev PC (see [Measured Results](#measured-results)).
-
----
-
 ## Quick Build
 
 The full library, examples, Python bindings, benchmarks, and hardware-instrumentation

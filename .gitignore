@@ -79,3 +79,4 @@ spike-runs/
 # Generated PDFs / docs build output
 docs/_build/
 *.pdf
+!docs/whitepapers/*.pdf

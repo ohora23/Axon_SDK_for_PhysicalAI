@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="2">
   <name>axon_ros1</name>
-  <version>0.0.1</version>
+  <version>0.5.0</version>
   <description>axon ROS1 integration: descriptor-topic offload (M1) + a drop-in "axon" image_transport plugin (M2), both zero-copy via the dma-buf SCM_RIGHTS sidecar.</description>
   <maintainer email="ohora23@gmail.com">ohora23</maintainer>
   <license>Apache-2.0</license>

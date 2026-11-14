@@ -16,12 +16,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake ninja-build g++ \
-            python3-dev pybind11-dev python3-pytest python3-numpy
+            python3-dev pybind11-dev python3-numpy
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAXON_BUILD_PYTHON=ON
       - name: Build
         run: cmake --build build
       - name: ctest
         run: ctest --test-dir build --output-on-failure
-      - name: pytest
-        run: PYTHONPATH=$PWD/build/python python3 -m pytest -q python/tests
+      - name: Python tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build/python
+        run: for t in python/tests/test_*.py; do echo "== $t"; python3 "$t"; done   # device tests SKIP without CUDA

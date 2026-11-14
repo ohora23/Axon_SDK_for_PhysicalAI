@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>axon_ros2</name>
-  <version>0.0.1</version>
+  <version>0.5.0</version>
   <description>axon ROS2 integration: descriptor-topic offload — the payload stays in a shared dma-buf (delivered via the axon SCM_RIGHTS sidecar) while only a fixed-size descriptor with bounded staleness rides the ROS2 topic.</description>
   <maintainer email="ohora23@gmail.com">ohora23</maintainer>
   <license>Apache-2.0</license>

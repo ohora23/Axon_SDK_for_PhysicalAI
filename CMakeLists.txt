@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 project(axon
-    VERSION 0.0.1
+    VERSION 0.5.0
     DESCRIPTION "Data-centric zero-copy for Physical AI"
     LANGUAGES C CXX)
 

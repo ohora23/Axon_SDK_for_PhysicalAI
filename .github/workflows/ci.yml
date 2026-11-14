@@ -21,9 +21,5 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAXON_BUILD_PYTHON=ON
       - name: Build
         run: cmake --build build
-      - name: ctest
+      - name: ctest (includes the Python binding tests; device tests SKIP without CUDA)
         run: ctest --test-dir build --output-on-failure
-      - name: Python tests
-        env:
-          PYTHONPATH: ${{ github.workspace }}/build/python
-        run: for t in python/tests/test_*.py; do echo "== $t"; python3 "$t"; done   # device tests SKIP without CUDA

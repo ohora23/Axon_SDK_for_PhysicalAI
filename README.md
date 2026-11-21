@@ -62,12 +62,12 @@ Green = payload, referenced in place and never copied. Blue = the only thing tha
 
 | What | Result |
 |---|---|
-| GPU → GPU across processes, 1-4 MiB (vs ROS 2 loaned messages + data-sharing, C++) | **7-19× lower** latency (24-26 µs vs 162-485 µs) for a consumer that copies results out, or any consumer with CUDA MPS (kernel consumer, MPS: 23 vs 178 µs at 1 MiB). Without MPS a kernel-launching consumer pays the GPU context switch with any transport: 129 vs 176 µs (1.4×) |
+| GPU → GPU across processes, 1-4 MiB (vs ROS 2 loaned messages + data-sharing, C++) | **7-19× lower** latency (24-26 µs vs 162-484 µs) for a consumer that copies results out, or any consumer with CUDA MPS (kernel consumer, MPS: 23 vs 178 µs at 1 MiB). Without MPS a kernel-launching consumer pays the GPU context switch with any transport: 129 vs 176 µs (1.4×) |
 | GPU → GPU vs the GPU-sharing ROS 2 transports (official `rosidl::Buffer` CUDA backend, ros2_cuda_ipc) | With CUDA MPS: **~2× lower** at 1 MiB for a consumer that runs a kernel on the frame (≈23 vs 44-49 µs; 1.6× at 4 MiB), ~1.5-2× for one that copies results out. Without MPS: ~5× lower only for a copying consumer (≈25 vs ≈125 µs); a kernel consumer pays the ~100 µs switch between the processes' GPU contexts with axon too (129 vs 122-124 µs) |
 | Across processes vs ROS 2 **inside one process** (intra-process `unique_ptr` / type adapter) | **not slower** for copy-out consumers or with MPS: 4-5.5 µs faster with axon's consumer spinning against a `spin_some` loop (e.g. GPU 24 vs 28 µs), 1.3-2 µs faster with both consumers blocking (deep C-states off). **Exception:** a kernel-launching GPU consumer without MPS pays the cross-process context switch that one process avoids (129 vs 25 µs) |
 | 1 → 8 subscribers, GPU 1 MiB (event-driven consumers, deep C-states off) | **25 → 38 µs** vs 154 → 450 µs; producer and all subscribers together **0.021 vs 0.26 cores (12×)**. At default C-states: 145 vs 549 µs, 0.053 vs 0.320 cores (6×) |
 | Host → host vs other shared-memory transports (iceoryx2 0.10, Cyclone DDS + iceoryx, zenoh SHM), 64 B-64 MiB | **about the same as iceoryx2** up to 4 MiB (1 MiB: 15 vs 17 µs; Cyclone loaned 31, zenoh 125); **slower from 16 MiB** with a 4-buffer ring (373 vs 219 µs with the clock held; DRAM traffic grows with ring depth, and 1 buffer matches iceoryx2). The host path is not where axon wins |
-| Host → host, 1 MiB vs ROS 2 loaned + data-sharing (#43) | **2.4× lower** (15 µs vs 36 µs); 1.4× at 4 MiB — a fixed 4-19 µs per message, shrinking in relative terms as frames grow |
+| Host → host, 1 MiB vs ROS 2 loaned + data-sharing (#43) | **2.4× lower** (15 µs vs 36 µs); 1.4× at 4 MiB (the later payload sweep: 2.2× / 1.3×) — a fixed 4-19 µs per message, shrinking in relative terms as frames grow |
 | Multi-stream robot workload @ 297 MB/s (same comparison, event-driven consumer) | camera p50 **29 vs 44 µs**, **half the CPU** (0.019 vs 0.038 cores), 2.8× fewer cache-misses, every frame delivered |
 | RT loop page faults | **0 / frame** |
 | GPU cross-process share | **zero-copy**, 200/200 frames, 1.68 GB |
@@ -222,7 +222,7 @@ The rclpy sweep below (0.30 vs 0.98 cores) is almost all Python:
 | 1 MiB | 36 / **15** | 171 / **25** |
 | 4 MiB | 80 / **59** | 485 / **26** |
 
-On the host, ROS 2's zero-copy path is close: both copy the payload once into shared memory, and axon saves a fixed 4-19 µs per message. On the GPU, a ROS 2 message lives in host memory, so the payload goes D2H and H2D around the transport; axon hands over the device buffer itself and stays at 24-26 µs from 147 KiB to 4 MiB (36 / 184 µs at 16 / 64 MiB). Default Fast DDS does **not** take the zero-copy path for these sizes: it needs the XML profile in that directory.
+On the host, ROS 2's zero-copy path is close: both copy the payload once into shared memory, and axon saves a fixed 4-19 µs per message. On the GPU, a ROS 2 message lives in host memory, so the payload goes D2H and H2D around the transport; axon hands over the device buffer itself and stays at 24-26 µs from 147 KiB to 4 MiB (36 / 184 µs at 16 / 64 MiB). That is the time to a small copy-out on the consumer; a consumer that launches its own kernel also pays the switch between the two processes' CUDA contexts unless CUDA MPS runs (129 vs 176 µs at 1 MiB without MPS, 23 vs 178 µs with it; [white paper §3.1](docs/whitepapers/axon-performance-claims.pdf)). Default Fast DDS does **not** take the zero-copy path for these sizes: it needs the XML profile in that directory.
 
 **Single-stream latency vs rclpy** ([`benchmarks/`](benchmarks/)):
 
@@ -469,7 +469,7 @@ Design → working library + measured results. Done (merged to `main`):
 - [x] **Direction A — vision→LLM zero-copy** — framework tensor ↔ axon GPU buffer via `__cuda_array_interface__` on both the producer (`device_array`) and the consumer (`latest_view`), plus consumer-side CUDA VMM import. Working two-process demo (`examples/vla_demo/`: DeiT-tiny → axon → GPT-2 prefill, same GPU pointer both sides, no host copy)
 - [x] **Jetson NvBufSurface backend** — `PoolBackend::NvBufSurface` (`AXON_ENABLE_JETSON`): a UVC camera captures straight into the pool and another process gets the frame as a host view **and** a CUDA pointer, no copy. Verified on AGX Xavier with a real webcam (`examples/jetson_camera/`, host==device 4/4, staleness ~0.5 ms)
 - [x] **Direction D — NVENC data flywheel** — record the stream to disk straight from the shared GPU buffer: the recorder feeds each `latest_view()` to hardware NVENC with no host copy (`examples/nvenc_flywheel/`, decode-verified H.264)
-- [x] **Fair C++ benchmark against ROS 2's zero-copy path** — rclcpp, loaned messages + Fast DDS data-sharing, host and GPU (`benchmarks/ros2_cpp/`): host 1 MiB 15 vs 36 µs, GPU→GPU 4 MiB 26 vs 485 µs; multi-stream at 297 MB/s camera p50 29 vs 44 µs for 0.019 vs 0.038 cores
+- [x] **Fair C++ benchmark against ROS 2's zero-copy path** — rclcpp, loaned messages + Fast DDS data-sharing, host and GPU (`benchmarks/ros2_cpp/`): host 1 MiB 15 vs 36 µs, GPU→GPU 4 MiB 26 vs 485 µs (copy-out consumer); multi-stream at 297 MB/s camera p50 29 vs 44 µs for 0.019 vs 0.038 cores
 - [x] **Event-driven consumer** — `TensorSubscriber::wait_for_update` / `wait_any` block on a futex in the metadata slot (`futex_waitv` for several streams); the publisher pays a `FUTEX_WAKE` only while someone waits, so `publish()` stays syscall-free for RT producers
 - [x] **No silent drops** — `publish()` returns -1 with `EMSGSIZE`/`EINVAL` for a descriptor that does not fit (and spends no seqno), `TensorPublisher::create()` refuses import params a handshake cannot carry (`E2BIG`), and the Python bindings raise
 
@@ -482,7 +482,7 @@ Next:
 
 ## Contributing
 
-Working library, pre-alpha and moving fast. Issues, discussions, and PRs are welcome. The core has zero required dependencies and builds/tests green (9/9) on a stock Linux box — see [docs/usage.md](docs/usage.md) to get started.
+Working library, pre-alpha and moving fast. Issues, discussions, and PRs are welcome. The core has zero required dependencies and builds/tests green (9/9; 12/12 with the Python bindings, as in CI) on a stock Linux box — see [docs/usage.md](docs/usage.md) to get started.
 
 > **Docs are bilingual.** `README.md` (English) is the source of truth; `README.ko.md` (한국어) mirrors it. Edit **both in the same commit** when you change either.
 

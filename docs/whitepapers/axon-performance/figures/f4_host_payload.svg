@@ -2021,6 +2021,18 @@ L 3 3
      <use xlink:href="#m20c1c3ba5a" x="445.67732" y="53.283581" style="fill: #1f6fb2; stroke: #1f6fb2; stroke-width: 1.5"/>
     </g>
    </g>
+   <g id="PathCollection_2">
+    <defs>
+     <path id="m243d31bec7" d="M -3.872983 0 
+L 3.872983 0 
+M 0 3.872983 
+L 0 -3.872983 
+" style="stroke: #2e8b57; stroke-width: 1.5"/>
+    </defs>
+    <g clip-path="url(#p5d29740574)">
+     <use xlink:href="#m243d31bec7" x="445.67732" y="62.083618" style="fill: #2e8b57; stroke: #2e8b57; stroke-width: 1.5"/>
+    </g>
+   </g>
    <g id="legend_1">
     <g id="line2d_107">
      <path d="M 52.960348 18.888906 

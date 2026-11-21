@@ -52,10 +52,14 @@ MS_CPU = [0.077, 0.038, 0.015, 0.019]
 MS_P50 = [103, 44, 557, 29]
 MS_MISS = [15.6, 3.66, 0.87, 1.31]
 # benchmarks/ros2_cpp/README.md "Tail latency under load (host)", 1 MiB p50, the two runs (low, high)
-TAIL = {"idle": {"axon": (23, 26), "iceoryx2": (20, 24), "ROS 2 loaned": (35, 40)},
-        "CPU load (pinned)": {"axon": (32, 33), "iceoryx2": (26, 29), "ROS 2 loaned": (548, 584)},
-        "memory load (pinned)": {"axon": (173, 179), "iceoryx2": (196, 198), "ROS 2 loaned": (284, 312)},
-        "CPU load, unpinned": {"axon": (321, 495), "iceoryx2": (510, 706), "ROS 2 loaned": (1545, 1837)}}
+TAIL = {"1 MiB": {"idle": {"axon": (23, 26), "iceoryx2": (20, 24), "ROS 2 loaned": (35, 40)},
+                  "CPU load\n(pinned)": {"axon": (32, 33), "iceoryx2": (26, 29), "ROS 2 loaned": (548, 584)},
+                  "memory load\n(pinned)": {"axon": (173, 179), "iceoryx2": (196, 198), "ROS 2 loaned": (284, 312)},
+                  "CPU load,\nunpinned": {"axon": (321, 495), "iceoryx2": (510, 706), "ROS 2 loaned": (1545, 1837)}},
+        "4 MiB": {"idle": {"axon": (69, 120), "iceoryx2": (68, 97), "ROS 2 loaned": (113, 115)},
+                  "CPU load\n(pinned)": {"axon": (139, 175), "iceoryx2": (97, 103), "ROS 2 loaned": (781, 830)},
+                  "memory load\n(pinned)": {"axon": (713, 720), "iceoryx2": (749, 754), "ROS 2 loaned": (849, 875)},
+                  "CPU load,\nunpinned": {"axon": (658, 714), "iceoryx2": (639, 787), "ROS 2 loaned": (1636, 1907)}}}
 # same file, frame-clock probe (16 MiB, 30 Hz host producer), p50 / p90 µs (upper end of the two runs)
 CLOCK = [("no limit", 430, 549), ("CpuLatencyHold 1 µs", 213, 419), ("polling (0 µs)", 212, 221), ("2 ms pre-wake spin", 211, 216)]
 # docs/hardware-verification.md §7, Jetson AGX Xavier 1 kHz cyclictest worst case (µs): idle, load
@@ -63,26 +67,31 @@ RT = [("stock kernel, 30 W", 1138, 1263), ("PREEMPT_RT, 30 W", 1145, 1229), ("RT
       ("RT + CPUs 4-7 isolated, 30 W", 133, 226), ("RT + isolated, MAXN + jetson_clocks", 74, 148)]
 
 # ---------------- Figure 1: the claim map ----------------
-claims = [  # (label, factor = other / axon, colour)
-    ("GPU→GPU 4 MiB vs ROS 2 zero-copy", 484 / 26),
-    ("GPU 1 MiB, 1→8 subscribers vs ROS 2 zero-copy", 449.7 / 37.9),
-    ("GPU→GPU 1 MiB vs ROS 2 zero-copy", 162 / 24),
-    ("GPU vs rosidl::Buffer, copy-out consumer, no MPS", 126 / 24),
-    ("GPU vs rosidl::Buffer, kernel consumer, with MPS", 49 / 23),
-    ("multi-stream CPU vs ROS 2 zero-copy", 0.038 / 0.019),
+claims = [  # (label, factor = other / axon). Latency unless tagged; against the faster competitor where there are two
+    ("GPU→GPU 4 MiB vs ROS 2 zero-copy (copy-out consumer)", 484 / 26),
+    ("GPU 1 MiB, 1→8 subs vs ROS 2 zero-copy (C-states held)", 449.7 / 37.9),
+    ("GPU 1 MiB, kernel consumer, MPS vs ROS 2 zero-copy", 178 / 23),
+    ("GPU→GPU 1 MiB vs ROS 2 zero-copy (copy-out consumer)", 162 / 24),
+    ("GPU vs cudaipc, copy-out consumer, no MPS", 124 / 24),
+    ("GPU vs cudaipc, kernel consumer, with MPS", 44 / 23),
+    ("[CPU] multi-stream vs ROS 2 zero-copy", 0.038 / 0.019),
     ("host 1 MiB vs ROS 2 zero-copy", 33.9 / 15.4),
     ("multi-stream camera p50 vs ROS 2 zero-copy", 44 / 29),
+    ("GPU 1 MiB, kernel consumer, no MPS vs ROS 2 zero-copy", 176 / 129),
     ("host 4 MiB vs ROS 2 zero-copy", 75.4 / 59.2),
-    ("Jetson camera→inference vs pageable copy (OAK-D, locked)", cam("oak_jetson_clocks_warm", "copy") / cam("oak_jetson_clocks_warm", "zerocopy")),
+    ("[end-to-end] Jetson OAK-D vs pageable copy (locked)", cam("oak_jetson_clocks_warm", "copy") / cam("oak_jetson_clocks_warm", "zerocopy")),
     ("host 1 MiB vs iceoryx2", 16.5 / 15.4),
-    ("Jetson camera→inference vs mapped copy (OAK-D, locked)", cam("oak_jetson_clocks_warm_mapped", "copy") / cam("oak_jetson_clocks_warm_mapped", "zerocopy")),
-    ("GPU vs rosidl::Buffer, kernel consumer, no MPS", 124 / 129),
+    ("[end-to-end] Jetson OAK-D vs mapped copy (locked)", cam("oak_jetson_clocks_warm_mapped", "copy") / cam("oak_jetson_clocks_warm_mapped", "zerocopy")),
+    ("GPU vs cudaipc, kernel consumer, no MPS", 122 / 129),
+    ("host 64 MiB vs iceoryx2 (4-buffer ring)", 2348 / 3271),
+    ("host 4 MiB under pinned CPU load vs iceoryx2", 100 / 157),
     ("host 16 MiB vs iceoryx2 (4-buffer ring, clock held)", 219 / 373),
+    ("GPU 1 MiB, kernel consumer, no MPS vs ROS 2 intra-process", 25 / 129),
 ]
 claims.sort(key=lambda c: -c[1])
 def colour(f):
     return WIN if f >= 3 else MOD if f >= 1.2 else PAR if f >= 0.9 else LOSS
-fig, ax = plt.subplots(figsize=(7.4, 4.6))
+fig, ax = plt.subplots(figsize=(7.6, 5.6))
 for i, (lab, f) in enumerate(claims):
     ax.barh(i, f, color=colour(f), height=0.62, left=0)
     ax.text(f * 1.04, i, f"{f:.2f}×", va="center", fontsize=7.5)
@@ -90,12 +99,12 @@ ax.set_xscale("log")
 ax.axvline(1, color="#555", lw=0.8)
 ax.set_yticks(range(len(claims)), [c[0] for c in claims], fontsize=7.5)
 ax.invert_yaxis()
-ax.set_xlim(0.4, 40)
-ax.set_xticks([0.5, 1, 2, 5, 10, 20], ["0.5×", "1×", "2×", "5×", "10×", "20×"])
+ax.set_xlim(0.15, 40)
+ax.set_xticks([0.2, 0.5, 1, 2, 5, 10, 20], ["0.2×", "0.5×", "1×", "2×", "5×", "10×", "20×"])
 ax.set_xlabel("other / axon (median latency or CPU; > 1 = axon better, log scale)")
 from matplotlib.patches import Patch
-ax.legend(handles=[Patch(color=WIN, label="≥ 3×"), Patch(color=MOD, label="1.2-3×"), Patch(color=PAR, label="parity (0.9-1.2×)"),
-                   Patch(color=LOSS, label="axon slower")], frameon=False, fontsize=7, loc="lower right")
+ax.legend(handles=[Patch(color=WIN, label="factor ≥ 3"), Patch(color=MOD, label="1.2-3"), Patch(color=PAR, label="0.9-1.2"),
+                   Patch(color=LOSS, label="< 0.9 (axon slower)")], frameon=False, fontsize=7, loc="lower right")
 fig.tight_layout()
 save(fig, "f1_claim_map.svg")
 
@@ -136,6 +145,7 @@ for name, v in HOST.items():
     pts = [(b, y) for b, y in zip(PAYB, v) if y is not None]
     ax.plot([p[0] for p in pts], [p[1] for p in pts], marker="o", ms=3.5, color=hcols[name], label=name, lw=1.6 if name.startswith("axon") else 1.1)
 ax.scatter([16777216] * 2, [HELD16["axon, 1 buffer"], HELD16["axon, 4 buffers"]], marker="x", color=AX, zorder=5)
+ax.scatter([16777216], [HELD16["iceoryx2"]], marker="+", s=60, color=IOX, zorder=5)
 ax.annotate("clock held: 1 buffer 220,\n4 buffers 373 (iceoryx2 219)", (16777216, 220), xytext=(1.3e5, 1300), fontsize=7,
             arrowprops=dict(arrowstyle="-", color="#888", lw=0.7))
 ax.set_xscale("log"); ax.set_yscale("log")
@@ -170,19 +180,21 @@ for ax, vals, title in zip(axes, (MS_CPU, MS_P50, MS_MISS), ("CPU (cores)", "cam
 fig.tight_layout()
 save(fig, "f6_multistream.svg")
 
-# ---------------- Figure 7: tail under load (1 MiB p50, two runs as a range) ----------------
-fig, ax = plt.subplots(figsize=(7.2, 2.8))
-conds = list(TAIL)
+# ---------------- Figure 7: tail under load (p50, two runs as a range), 1 and 4 MiB ----------------
+fig, axes = plt.subplots(1, 2, figsize=(7.4, 2.9), sharey=True)
 w = 0.26
-for j, (name, col) in enumerate((("axon", AX), ("iceoryx2", IOX), ("ROS 2 loaned", ROS))):
-    xs = [i + (j - 1) * w for i in range(len(conds))]
-    lo = [TAIL[c][name][0] for c in conds]; hi = [TAIL[c][name][1] for c in conds]
-    ax.bar(xs, hi, width=w, color=col, alpha=0.35)
-    ax.bar(xs, lo, width=w, color=col, label=name)
-ax.set_yscale("log")
-ax.set_xticks(range(len(conds)), conds, fontsize=7.5)
-ax.set_ylabel("p50, µs (log); dark = lower run, light = upper")
-ax.legend(frameon=False, fontsize=7.5, ncol=3, loc="upper left")
+for ax, size in zip(axes, TAIL):
+    conds = list(TAIL[size])
+    for j, (name, col) in enumerate((("axon", AX), ("iceoryx2", IOX), ("ROS 2 loaned", ROS))):
+        xs = [i + (j - 1) * w for i in range(len(conds))]
+        lo = [TAIL[size][c][name][0] for c in conds]; hi = [TAIL[size][c][name][1] for c in conds]
+        ax.bar(xs, hi, width=w, color=col, alpha=0.35)
+        ax.bar(xs, lo, width=w, color=col, label=name)
+    ax.set_yscale("log")
+    ax.set_xticks(range(len(conds)), conds, fontsize=7)
+    ax.set_title(f"host {size}", fontsize=9)
+axes[0].set_ylabel("p50, µs (log); dark = lower run, light = upper")
+axes[0].legend(frameon=False, fontsize=7, ncol=1, loc="upper left")
 fig.tight_layout()
 save(fig, "f7_tail_load.svg")
 

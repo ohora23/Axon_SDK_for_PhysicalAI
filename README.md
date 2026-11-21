@@ -162,7 +162,7 @@ Fast-RTPS on the same workload. Full detail: [docs/hardware-verification.md](doc
 | Page faults during RT | **0** | **0 / frame** (flat at 20× the frames) ✅ |
 | GPU zero-copy import | real hardware | **RTX 5080: 200/200 frames, 0 copies, 1.68 GB** ✅ |
 | Sensor → accelerator, no copy | real board + real sensor | **AGX Xavier + UVC webcam: host == CUDA view on 30/30 frames, staleness ~0.5 ms** ✅ |
-| Camera → inference, end to end | real board + real camera | **AGX Xavier, UVC 640×480 → ResNet-18 TensorRT: zero-copy removes the H2D copy, 0.43 ms (default clocks) / 0.20 ms (`jetson_clocks`) per frame; camera timestamp → frame available (~32 ms) and the first GPU op after idle (0.3-1.1 ms) cost more** ([white paper](docs/whitepapers/axon-jetson-camera-inference-e2e.pdf)) ✅ |
+| Camera → inference, end to end | real board + real camera | **AGX Xavier, UVC 640×480 → ResNet-18 TensorRT: zero-copy removes the H2D copy, 0.43 ms (default clocks) / 0.20 ms (`jetson_clocks`) per frame; camera timestamp → frame available (~32 ms) and the first GPU op after idle (0.3-1.1 ms) cost more. USB 3 OAK-D (NV12 1280×800): camera interval 3.3 ms, capture → inferred 5.5 ms zero-copy vs 6.2 ms copy (`jetson_clocks`)** ([white paper](docs/whitepapers/axon-jetson-camera-inference-e2e.pdf)) ✅ |
 | Staleness bound | sum of 7 explicit terms | deterministic formula (§5) ✅ |
 | 1kHz RT worst-case jitter | < 100µs | Jetson Xavier, PREEMPT_RT + isolated CPUs: 133 / 226 µs (idle / load) at 30 W, 74 / 148 µs at MAXN; RT without isolation keeps 1.1-1.2 ms spikes ([§7](docs/hardware-verification.md)) 🟡 |
 
@@ -243,7 +243,7 @@ Reproduce with [`examples/jetson_camera/`](examples/jetson_camera/README.md); ev
 **Camera → inference, end to end — for small hand-mounted cameras.** The same board and camera
 feed a ResNet-18 (TensorRT FP16) in another process, zero-copy against the usual copy path
 (driver buffer → `memcpy` → host-to-device copy), timed stage by stage over 1,200 frames per cell.
-White paper (7 pages, PDF): **[Small cameras, big costs](docs/whitepapers/axon-jetson-camera-inference-e2e.pdf)**.
+White paper (9 pages, PDF): **[Small cameras, big costs](docs/whitepapers/axon-jetson-camera-inference-e2e.pdf)**.
 
 | received → inferred, p50 (first-GPU-op cost excluded¹) | zero-copy | copy |
 |---|---|---|
@@ -258,6 +258,15 @@ the ~32 ms between the frame's V4L2 timestamp and the frame being available (USB
 plus driver dequeue) and the first GPU operation after the idle gap between 30 fps frames
 (0.9-1.1 ms at default clocks). For a hand with several cameras the copy saving scales with the camera count;
 the camera link and the clock policy matter more. Code: [`examples/jetson_e2e/`](examples/jetson_e2e/README.md).
+
+A USB 3 camera changes the balance (white paper §6). An OAK-D Pro W in UVC mode (NV12 1280×800, 1.5 MB, USB 3 bulk)
+delivers the frame 3.3 ms after its timestamp instead of 32 ms, and zero-copy then saves 0.86 / 0.43 ms of
+received → inferred (default / `jetson_clocks`):
+
+| capture → inferred, p50 | zero-copy | copy |
+|---|---|---|
+| webcam, USB 2.0, `jetson_clocks` | 34.36 ms | 34.66 ms |
+| OAK-D, USB 3, `jetson_clocks` | **5.55 ms** | 6.24 ms |
 
 > Numbers are machine-specific — reproduce with `benchmarks/mock/mock_compare.py` and the
 > `instrumentation/` suite (all resource-bounded so they won't freeze the box).

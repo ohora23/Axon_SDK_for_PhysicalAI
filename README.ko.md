@@ -59,7 +59,7 @@ flowchart LR
 | GPU 메모리를 공유하는 ROS 2 전송 대비 GPU → GPU (공식 `rosidl::Buffer` CUDA 백엔드, ros2_cuda_ipc) | CUDA MPS를 켜면, 프레임에 커널을 실행하는 소비자 기준 1 MiB에서 **약 2× 낮음**(≈23 vs 44~49 µs, 4 MiB에서는 1.6×), 결과를 복사해 가는 소비자 기준 1.5~2×. MPS가 없으면 복사해 가는 소비자에서만 약 5× 낮다(≈25 vs ≈125 µs). 커널을 실행하는 소비자는 프로세스 간 GPU 컨텍스트 전환 비용(약 100 µs)을 axon에서도 낸다(129 vs 122~124 µs) |
 | 프로세스 간 axon vs **한 프로세스 안의** ROS 2 (intra-process `unique_ptr` / type adapter) | **느리지 않다**: axon 소비자가 spin하고 ROS 2가 `spin_some` 루프로 받을 때 4~5.5 µs 빠르고(예: GPU 24 vs 28 µs), 두 소비자가 모두 blocking일 때(깊은 C-state 끔) 1.3~2 µs 빠르다. 노드를 한 프로세스로 모아도 axon보다 빨라지지 않는다 |
 | 구독자 1 → 8개, GPU 1 MiB (이벤트 방식 소비자, 깊은 C-state 끔) | **25 → 38 µs** vs 154 → 450 µs. 생산자와 구독자 전체 CPU 0.021 vs 0.26 cores |
-| 다른 공유 메모리 전송 대비 host → host (iceoryx2 0.10, Cyclone DDS + iceoryx, zenoh SHM), 64 B~64 MiB | 4 MiB까지는 **iceoryx2와 비슷하다**(1 MiB: 15 vs 17 µs, Cyclone loan 31, zenoh 125). 기본값인 버퍼 4개짜리 ring에서는 **16 MiB부터 더 느리다**(클럭을 고정한 측정에서 373 vs 219 µs). ring이 깊을수록 DRAM 트래픽이 늘어나고, 버퍼 1개면 iceoryx2와 같다. host 경로는 axon이 이기는 곳이 아니다 |
+| 다른 공유 메모리 전송 대비 host → host (iceoryx2 0.10, Cyclone DDS + iceoryx, zenoh SHM), 64 B~64 MiB | 4 MiB까지는 **iceoryx2와 비슷하다**(1 MiB: 15 vs 17 µs, Cyclone loan 31, zenoh 125). 버퍼 4개짜리 ring에서는 **16 MiB부터 더 느리다**(클럭을 고정한 측정에서 373 vs 219 µs). ring이 깊을수록 DRAM 트래픽이 늘어나고, 버퍼 1개면 iceoryx2와 같다. host 경로는 axon이 이기는 곳이 아니다 |
 | host → host, 1 MiB, ROS 2 loaned message + data-sharing 대비 (#43) | **2.4× 낮음** (15 µs vs 36 µs), 4 MiB에서는 1.4× |
 | 다중스트림 로봇 워크로드 @ 297 MB/s (같은 비교, 이벤트 방식 소비자) | 카메라 p50 **29 vs 44 µs**, **CPU 절반** (0.019 vs 0.038 cores), 캐시미스 2.8× 적음, 모든 프레임 전달 |
 | RT 루프 page fault | **0 / frame** |
@@ -67,6 +67,7 @@ flowchart LR
 | VLM 인코더→LLM 핸드오프 (video 34 MB) | host 왕복 대비 **36× 빠름** |
 | Jetson(AGX Xavier)에서 실제 카메라 → CUDA | **복사 0**: 카메라가 쓴 버퍼를 다른 프로세스의 CUDA가 그대로 읽음 |
 
+이 수치 중 무엇을 어떤 조건에서 주장해도 되는지: **[What axon's numbers support](docs/whitepapers/axon-performance-claims.pdf)**(성능 주장 검증 백서, 영문 12쪽).
 자세한 내용은 [측정 결과](#측정-결과), 신선도 보장은 [목표 지표와 실측](#목표-지표와-실측)에 있다.
 
 ---
@@ -195,7 +196,7 @@ C++에서는 모든 전송이 가볍기 때문에, CPU 차이는 실제로 있�
 | 1 MiB | 36 / **15** | 171 / **25** |
 | 4 MiB | 80 / **59** | 485 / **26** |
 
-host에서는 ROS 2의 zero-copy 경로가 axon에 가깝다. 둘 다 페이로드를 공유 메모리에 한 번 쓰고, axon이 아끼는 것은 메시지마다 붙는 약 20 µs의 고정 비용이다. GPU에서는 ROS 2 메시지가 host 메모리에 있어야 하므로 페이로드가 전송 앞뒤로 D2H와 H2D를 거친다. axon은 device 버퍼 자체를 넘기므로 크기와 상관없이 24~26 µs를 유지한다. 기본 설정의 Fast DDS는 이 크기에서 zero-copy 경로를 쓰지 **않으며**, 그 디렉터리의 XML 프로파일이 필요하다.
+host에서는 ROS 2의 zero-copy 경로가 axon에 가깝다. 둘 다 페이로드를 공유 메모리에 한 번 쓰고, axon이 아끼는 것은 메시지마다 붙는 4~19 µs의 고정 비용이다. GPU에서는 ROS 2 메시지가 host 메모리에 있어야 하므로 페이로드가 전송 앞뒤로 D2H와 H2D를 거친다. axon은 device 버퍼 자체를 넘기므로 147 KiB~4 MiB에서 24~26 µs를 유지한다(16 / 64 MiB에서는 36 / 184 µs). 기본 설정의 Fast DDS는 이 크기에서 zero-copy 경로를 쓰지 **않으며**, 그 디렉터리의 XML 프로파일이 필요하다.
 
 **단일스트림 지연, rclpy 대비** ([`benchmarks/`](benchmarks/)):
 
@@ -209,7 +210,7 @@ ROS2(rclpy)는 같은 데이터를 옮기는 데 **캐시미스 8.6배**, **명�
 
 **로봇 보드 없이도 실제 GPU zero-copy.** axon의 FD 사이드카가 살아 있는 RTX 5080 GPU 메모리 핸들을 프로세스 간에 나른다: 200/200 프레임 on-GPU 검증, **host 페이로드 복사 0**, 1.68 GB zero-copy 이동. 여기에 RT page fault **프레임당 0** 측정. [docs/hardware-verification.md](docs/hardware-verification.md) 및 [docs/adr/](docs/adr/)의 아키텍처 결정 참조.
 
-**실제 Jetson과 실제 카메라에서.** AGX Xavier(JetPack 5.1.6)와 UVC 웹캠으로, 카메라가 axon `NvBufSurface` pool에 직접 캡처하고 두 번째 프로세스가 같은 프레임을 host view **와** CUDA device 포인터로 받는다 — 경로 어디에도 복사가 없다.
+**실제 Jetson과 실제 카메라에서.** AGX Xavier(JetPack 5.1.6)와 UVC 웹캠으로, 카메라가 axon `NvBufSurface` pool에 직접 캡처하고 두 번째 프로세스가 같은 프레임을 host view **와** CUDA device 포인터로 받는다 — 경로 어디에도 사용자 공간 복사가 없다.
 
 | 검증 항목 (AGX Xavier, 640×480 YUYV) | 결과 |
 |---|---|

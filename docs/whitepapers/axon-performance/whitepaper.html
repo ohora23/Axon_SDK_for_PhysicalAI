@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>What axon's numbers support: a performance claims audit</title>
+<style>
+  @page { size: A4; margin: 17mm 16mm 17mm 16mm; }
+  body { font-family: "DejaVu Serif", Georgia, serif; font-size: 10pt; line-height: 1.45; color: #1a1a1a; max-width: 182mm; margin: 0 auto; }
+  h1 { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 19pt; line-height: 1.2; margin: 0 0 4pt; }
+  h2 { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 12.5pt; margin: 16pt 0 5pt; border-bottom: 0.6pt solid #999; padding-bottom: 2pt; }
+  h3 { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 10.5pt; margin: 11pt 0 3pt; }
+  .sub { font-family: "DejaVu Sans", Arial, sans-serif; color: #444; font-size: 10.5pt; margin-bottom: 2pt; }
+  .meta { font-family: "DejaVu Sans", Arial, sans-serif; color: #666; font-size: 8.5pt; margin-bottom: 10pt; }
+  .abstract { background: #f3f5f7; border-left: 3pt solid #1f6fb2; padding: 7pt 10pt; margin: 8pt 0 6pt; }
+  .key { border: 0.6pt solid #1f6fb2; padding: 6pt 10pt; margin: 8pt 0; }
+  .key li { margin: 2pt 0; }
+  table { border-collapse: collapse; width: 100%; font-family: "DejaVu Sans", Arial, sans-serif; font-size: 8.2pt; margin: 6pt 0 4pt; page-break-inside: avoid; }
+  th, td { border-bottom: 0.4pt solid #bbb; padding: 2.5pt 4pt; text-align: right; vertical-align: top; }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { border-bottom: 0.9pt solid #333; }
+  table.left td, table.left th { text-align: left; }
+  .cap { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 8.2pt; color: #444; margin: 2pt 0 10pt; }
+  figure { margin: 8pt 0; page-break-inside: avoid; }
+  figure img { width: 100%; }
+  code { font-family: "DejaVu Sans Mono", monospace; font-size: 8.4pt; }
+  pre { font-family: "DejaVu Sans Mono", monospace; font-size: 7.8pt; background: #f6f6f6; padding: 5pt 7pt; white-space: pre-wrap; page-break-inside: avoid; }
+  .note { font-size: 8.8pt; color: #333; }
+  .pb { page-break-before: always; }
+  .v { font-family: "DejaVu Sans", Arial, sans-serif; font-weight: bold; font-size: 7.6pt; padding: 0.5pt 4pt; border-radius: 2pt; white-space: nowrap; }
+  .strong { background: #1f6fb2; color: #fff; } .cond { background: #6fa8dc; color: #fff; }
+  .par { background: #b0b7bf; color: #222; } .no { background: #c4651c; color: #fff; }
+  .quote { border-left: 2pt solid #2e8b57; padding: 2pt 8pt; margin: 4pt 0; background: #f4faf6; }
+  .avoid { border-left: 2pt solid #c4651c; padding: 2pt 8pt; margin: 4pt 0; background: #fbf5f1; }
+</style>
+</head>
+<body>
+
+<h1>What axon's numbers support</h1>
+<div class="sub">A performance claims audit of a zero-copy data plane for physical AI:
+where it wins, by how much, under which conditions, and where it does not</div>
+<div class="meta">axon SDK v0.5 (github.com/ohora23/Axon_SDK_for_PhysicalAI) · 2026-11-21 ·
+measurements 2026-10-17 to 2026-11-21, PRs #43-#65 · workstation: Ryzen 9800X3D + RTX 5080, Ubuntu 24.04,
+ROS 2 Jazzy / Lyrical · embedded: Jetson AGX Xavier, JetPack 5.1.6</div>
+
+<div class="abstract">
+<b>Abstract.</b> axon moves tensors between processes by handing over a descriptor of at most 256 bytes
+while the payload stays in a shared buffer (a dma-buf, a CUDA allocation or a Jetson
+<code>NvBufSurface</code>). Over five weeks we compared it, in C++ and on the same machines, with ROS 2's
+own zero-copy path (loaned messages + Fast DDS data-sharing), with the GPU-sharing ROS 2 transports
+(the official <code>rosidl::Buffer</code> CUDA backend and ros2_cuda_ipc), with iceoryx2, Cyclone DDS +
+iceoryx and zenoh, and, on a Jetson, with a conventional camera → inference copy pipeline. This paper
+collects every comparison and grades each possible claim, including the losses. <b>The large,
+defensible win is GPU data between processes</b>: for a consumer that copies results out, or for any
+consumer with CUDA MPS, 7-19× lower latency than ROS 2's zero-copy path at 1-4 MiB (24-26 µs from
+147 KiB to 4 MiB). Without MPS, a consumer that launches its own kernel pays a GPU context switch with
+any transport, and the lead shrinks to 1.4× at 1 MiB; against ROS 2 composed into one process it
+becomes a loss. Against transports that also keep data on the GPU, axon is 1.4-2.1× faster with MPS.
+<b>On the host, axon is as fast as iceoryx2</b> up to 4 MiB and 4-19 µs per message ahead of ROS 2's
+zero-copy path, but slower at 16 MiB and above with a 4-buffer ring. On a Jetson with a real camera,
+the camera-buffer zero-copy path shortens capture → inferred by 0.3-1.1 ms against a pageable copy and
+by 0.1-0.35 ms against a well-built mapped copy.
+</div>
+
+<div class="key"><b>Claims, graded</b>
+<ul>
+<li><span class="v strong">STRONG</span> <b>GPU → GPU across processes, copy-out consumer or CUDA MPS: 6.8-18.6× lower latency than
+ROS 2 zero-copy</b> at 1-4 MiB (24-26 µs vs 162-484 µs; with MPS a kernel consumer is 23 vs 178 µs at 1 MiB) (§3.1).</li>
+<li><span class="v strong">STRONG</span> <b>GPU fan-out</b>: 1 → 8 subscribers, 25 → 38 µs vs 154 → 450 µs and 12× less CPU with deep
+C-states held off; 3.8× and 6× at the default C-states (§3.3).</li>
+<li><span class="v strong">STRONG</span> <b>No user-space copy of the payload</b>, 0 page faults per frame, and a GPU buffer shared
+across processes with 200/200 frames verified (§6).</li>
+<li><span class="v cond">CONDITIONAL</span> <b>GPU, kernel consumer without MPS</b>: 1.4× vs ROS 2 zero-copy at 1 MiB (129 vs 176 µs) (§3.1).</li>
+<li><span class="v cond">CONDITIONAL</span> <b>vs GPU-sharing ROS 2 transports</b>: 1.4-2.1× with CUDA MPS; 5× without MPS only for a
+copy-out consumer (§3.2).</li>
+<li><span class="v cond">CONDITIONAL</span> <b>Host path vs ROS 2 zero-copy</b>: 2.2× at 1 MiB, 1.3× at 4 MiB (4-19 µs per message);
+multi-stream workload at lower latency and about half the CPU (§4, §5).</li>
+<li><span class="v cond">CONDITIONAL</span> <b>Camera → inference on Jetson</b>: capture → inferred 0.3-1.1 ms shorter than a pageable
+copy, 0.1-0.35 ms shorter than a mapped copy (§7).</li>
+<li><span class="v par">PARITY</span> <b>Host vs iceoryx2</b> up to 4 MiB; <b>vs ROS 2 inside one process</b> for copy-out consumers
+or with MPS (§4, §5.2).</li>
+<li><span class="v no">NOT A WIN</span> <b>GPU kernel consumer without MPS vs ROS 2 inside one process</b> (129 vs 25 µs);
+<b>host payloads ≥ 16 MiB</b> with a 4-buffer ring (373 vs 219 µs at 16 MiB); <b>4 MiB under pinned CPU load</b>
+vs iceoryx2; <b>tail latency</b> and <b>RT jitter</b>, which CPU placement and the kernel decide (§4, §5.2, §8).</li>
+</ul></div>
+
+<figure><img src="figures/f1_claim_map.svg" alt="Claim map">
+<div class="cap">Figure 1. Selected head-to-head results: the other transport's median latency divided by axon's
+(log scale; above 1, axon is better). "[CPU]" marks a CPU ratio and "[end-to-end]" a whole camera → inference
+pipeline, which inference and the camera dominate; the rest are transport latencies. Where there are two
+GPU-sharing competitors the faster one is used. The cells differ in consumer mode and machine settings
+(busy-polling host cells, blocking fan-out with C-states held, clock held at 16 MiB only); each is
+described in its section. Colours are factor bands, not the grades of §2.</div></figure>
+
+<h2>1. What axon is, and how it was measured</h2>
+<p>axon is a C++20 library with Python bindings. A producer owns a pool of buffers, writes a frame into
+one of them and publishes a fixed-size descriptor (shape, dtype, pitch, timestamps, a sequence
+number); consumers read the latest frame as a view of the same memory, guarded by a seqlock. Pool file
+descriptors cross the process boundary once, over a UNIX socket sidecar (<code>SCM_RIGHTS</code>);
+after that, publishing is a store and a wake-up. Pools can hold host memory (memfd), CUDA VMM
+allocations exported as file descriptors, or Jetson <code>NvBufSurface</code> dma-bufs that a V4L2
+camera writes into.</p>
+<table class="left">
+<thead><tr><th>Test bed</th><th>What ran there</th></tr></thead>
+<tbody>
+<tr><td>Workstation: AMD Ryzen 7 9800X3D, RTX 5080, Ubuntu 24.04, kernels 6.8 / 7.0, ROS 2 Jazzy (Fast DDS 2.14, Cyclone, zenoh), ROS 2 Lyrical in Docker, iceoryx2 0.10</td>
+<td>All host and GPU transport comparisons (§3-§5, §8.1). Some runs had CPUs 2-4 and 10-12 offline because of a hardware fault; every table in the repository states the core layout.</td></tr>
+<tr><td>Jetson AGX Xavier, JetPack 5.1.6 (L4T r35.6), stock and PREEMPT_RT kernels; Logitech Webcam Pro 9000 (USB 2.0) and Luxonis OAK-D Pro W (USB 3, UVC mode)</td>
+<td>Camera → CUDA zero-copy, camera → TensorRT end to end (§7), 1 kHz RT jitter (§8.2).</td></tr>
+</tbody></table>
+<p><b>Rules we held ourselves to.</b> C++ on both sides (an early Python comparison inflated the gaps
+and is retired, §9). ROS 2's zero-copy path configured as intended: loaned messages with a Fast DDS
+data-sharing XML profile (the default profile silently copies large messages), verified by its
+shared-memory segments; the GPU backends verified by their reported backend type. The same machine,
+payloads and rates for every transport in a table, medians of two or three runs, runs gated against
+foreign GPU or CPU load. Where a result depended on a machine setting (CPU idle states, the
+producer's clock, CUDA MPS), we measured it both ways and report both. Two claims were retracted after
+review when a control experiment refuted them; they are listed in §9.</p>
+
+<h2>2. Reading this paper</h2>
+<p>Each result is graded:
+<span class="v strong">STRONG</span> large and robust to the conditions we varied;
+<span class="v cond">CONDITIONAL</span> real but dependent on a stated condition or small in absolute terms;
+<span class="v par">PARITY</span> no meaningful difference;
+<span class="v no">NOT A WIN</span> axon is slower or the transport is not what decides the number.
+Latencies are medians (p50) of publish-to-consumer-ready unless stated; "ROS 2 zero-copy" means loaned
+messages with Fast DDS data-sharing. Full tables, raw data and scripts are in
+<code>benchmarks/ros2_cpp/</code>, <code>instrumentation/</code> and <code>docs/hardware-verification.md</code>.</p>
+
+<h2 class="pb">3. GPU data between processes</h2>
+<h3>3.1 Against ROS 2's zero-copy path <span class="v strong">STRONG</span></h3>
+<p>A ROS 2 message lives in host memory, so a GPU tensor goes device → host before the transport and
+host → device after it, even when the transport itself is zero-copy. axon hands the consumer the
+device allocation itself. The result is flat in payload size:</p>
+<table>
+<thead><tr><th>GPU → GPU, p50 µs</th><th>147 KiB</th><th>1 MiB</th><th>4 MiB</th></tr></thead>
+<tbody>
+<tr><td>ROS 2 loaned + data-sharing</td><td>46</td><td>162</td><td>484</td></tr>
+<tr><td>axon</td><td><b>24</b></td><td><b>24</b></td><td><b>26</b></td></tr>
+<tr><td>ratio</td><td>1.9×</td><td>6.8×</td><td>18.6×</td></tr>
+</tbody></table>
+<div class="cap">Table 1. Source: <code>benchmarks/ros2_cpp/README.md</code>, "Single stream: latency" and "GPU → GPU against
+the other GPU zero-copy transports" (default CUDA contexts; with MPS the ROS 2 row is 41 / 169 / 479 µs). axon's
+consumer reads a 24-byte header and tail back from the device; that readback is most of its 24-26 µs. The ROS 2
+copies are pageable; pinning them would bring the 4 MiB cell to about 310 µs, still about 12× (estimated from a
+separate D2H + H2D measurement on the same machine). At 16 / 64 MiB: axon 36 / 184 µs, ROS 2 1769 / 6959 µs.</div>
+<p><b>What the consumer does matters.</b> The 24-26 µs is the time to a small copy-out. A consumer that
+launches its own kernel on the frame also pays the switch between the two processes' CUDA contexts
+(§3.2). At 1 MiB without MPS that consumer sees 129 µs with axon against 176 µs with ROS 2's zero-copy
+path (1.4×); with MPS, 23 against 178 µs (7.7×). The strong claim therefore needs "copy-out consumer, or
+MPS" attached.</p>
+
+<figure><img src="figures/f2_gpu_payload.svg" alt="GPU to GPU latency vs payload">
+<div class="cap">Figure 2. GPU → GPU latency by payload. ROS 2's zero-copy path grows with the payload (the
+D2H + H2D round trip); the GPU-sharing transports and axon are flat. MPS moves the two GPU-sharing ROS 2
+transports from ~124 µs to 35-42 µs; axon stays at 24-25 µs.</div></figure>
+
+<h3>3.2 Against transports that also keep data on the GPU <span class="v cond">CONDITIONAL</span></h3>
+<p>The official ROS 2 <code>rosidl::Buffer</code> CUDA backend (Lyrical) and ros2_cuda_ipc also pass a
+GPU allocation by reference. Their extra cost without MPS, about 100 µs, is mostly not the descriptor (24-32 µs) but, most likely,
+the switch between the two processes' CUDA contexts when the consumer waits on the producer's work
+(MPS, which shares one context, cuts it to about 6 µs). axon's
+handoff avoids that wait for a consumer that copies results out, but a consumer that launches its own
+kernel on the frame pays the same context switch with axon too:</p>
+<figure><img src="figures/f3_consumer_mps.svg" alt="Consumer type and MPS">
+<div class="cap">Figure 3. GPU 1 MiB, p50 µs, by what the consumer does and whether CUDA MPS runs (ROS 2 loaned for comparison:
+167 / 176 / 167 / 178 µs; ROS 2 intra-process: 29 / 25 / 37 / 32 µs). Source:
+<code>benchmarks/ros2_cpp/README.md</code>, "When the consumer runs a kernel".</div></figure>
+<p>So: <b>5.2× lower latency</b> without MPS for a copy-out consumer (24 vs 124-126 µs); <b>1.4-2.1×</b>
+with MPS (23-27 vs 41-56 µs here, 24-25 vs 35-42 µs across payloads in Figure 2); and <b>no lead</b> without MPS for a kernel consumer
+(129 vs 122-124 µs). A deployment that runs several GPU processes should enable MPS whichever transport
+it uses; axon's lead then is 1.4-2×. The <code>rosidl::Buffer</code> cells ran ROS 2 Lyrical with Fast DDS 3.6.2
+in a container, the other ROS 2 cells Jazzy with Fast DDS 2.14 on the host.</p>
+
+<h3>3.3 Fan-out <span class="v strong">STRONG</span></h3>
+<figure><img src="figures/f5_fanout.svg" alt="Fan-out">
+<div class="cap">Figure 4. One producer, 1-8 event-driven subscribers, GPU 1 MiB. Source:
+<code>benchmarks/ros2_cpp/README.md</code>, "1 → N fan-out" (deep C-states off).</div></figure>
+<p>Every ROS 2 subscriber repeats the host → device copy; axon's subscribers share one device buffer.
+With deep C-states held off, at eight subscribers axon's median is 37.9 µs against 449.7 µs (11.9×), and
+the producer and all subscribers together use 0.021 cores against 0.256 (12×). At the default C-states
+every blocking consumer also pays a wake-up: 145 vs 549 µs (3.8×) and 0.053 vs 0.320 cores (6×). These
+subscribers copy a small check out of the frame; eight kernel-launching subscribers without MPS were not
+measured. On the host the same fan-out costs both
+transports little: 1 MiB to eight subscribers is 19.0 vs 33.6 µs.</p>
+
+<h2 class="pb">4. Host data between processes</h2>
+<h3>4.1 Up to 4 MiB <span class="v cond">CONDITIONAL</span> vs ROS 2, <span class="v par">PARITY</span> vs iceoryx2</h3>
+<figure><img src="figures/f4_host_payload.svg" alt="Host latency vs payload">
+<div class="cap">Figure 5. Host → host latency, 64 B-64 MiB, busy-polling consumers. Source:
+<code>benchmarks/ros2_cpp/README.md</code>, "Payload size, iceoryx2 and the other RMWs" (producer clock not
+held); the crosses are the clock-held 16 MiB runs from the same file.</div></figure>
+<p>On the host every zero-copy transport writes the payload once into shared memory, so the
+differences are fixed per-message costs. axon and iceoryx2 are within about 1 µs of each other up to
+4 MiB (1 MiB: 15.4 vs 16.5 µs). ROS 2's zero-copy path adds 4-19 µs per message across the sweep (1 MiB: 33.9 µs,
+2.2×; 4 MiB: 75.4 vs 59.2 µs, 1.3×); Cyclone + iceoryx is similar (30.9 µs), and zenoh with shared
+memory, which still serializes, is 125.5 µs. <b>A claim of "faster than ROS 2 on the host" is true but
+small</b>: a fixed cost of up to about 20 µs, shrinking in relative terms as frames grow.</p>
+
+<h3>4.2 16 MiB and above <span class="v no">NOT A WIN</span></h3>
+<p>With the four-buffer ring the benchmarks use (the ring depth is a required pool parameter, not a
+library default), axon is the slowest zero-copy transport at 16 MiB: 373 µs against 219 µs for iceoryx2
+with the producer's clock held (474 vs 238 µs without), and 3271 vs 2348 µs at 64 MiB. The cost grows with
+ring depth (1 / 2 / 4 buffers: 220 / 230 / 373 µs) and with the DRAM traffic the ring causes; one buffer
+matches iceoryx2 at 16 MiB and is 2.5 % faster than it at 64 MiB (2155 vs 2210 µs). A shallower ring makes a torn frame more likely for a slow reader, so the depth is a
+trade-off to size per stream (<code>docs/usage.md</code>); at this size it is a loss to report, not to hide.</p>
+
+<h3>4.3 Tail latency under load <span class="v no">NOT A WIN</span> for any transport</h3>
+<figure><img src="figures/f7_tail_load.svg" alt="Tail under load">
+<div class="cap">Figure 6. Host p50 under load at 1 and 4 MiB, two runs (dark = lower, light = upper). Source:
+<code>benchmarks/ros2_cpp/README.md</code>, "Tail latency under load (host)".</div></figure>
+<p>Pinned to their own physical cores, axon and iceoryx2 keep their 1 MiB median under CPU load (32-33
+and 26-29 µs), while ROS 2 loaned rises from 35-40 to 548-584 µs, for a reason this run does not
+show. At 4 MiB axon's median rises from 69-120 to 139-175 µs while iceoryx2 stays at 97-103 µs: a loss. Unpinned, with load on every CPU, every transport has a p90 of 3-5 ms and a p99 of 6-9 ms. The
+tail is decided by CPU placement and the scheduler, not by the transport, and p99 under load varies
+too much between runs to rank anyone.</p>
+
+<h2>5. Whole workloads</h2>
+<h3>5.1 A multi-stream robot workload <span class="v cond">CONDITIONAL</span></h3>
+<p>Four cameras, a LiDAR, an IMU and odometry, scaled to 297 MB/s, every consumer event-driven:</p>
+<figure><img src="figures/f6_multistream.svg" alt="Multi-stream">
+<div class="cap">Figure 7. Median of three runs at 297 MB/s. Source: README "Measured Results"
+(<code>benchmarks/ros2_cpp</code>, multi-stream). Every transport delivered 100 % of the camera frames.</div></figure>
+<p>Event-driven (<code>wait_any</code>), axon has the lowest camera latency (p50 29 vs 44 µs, p99 124 vs
+235 µs) at half the CPU of ROS 2's zero-copy path (0.019 vs 0.038 cores; the ROS 2 cells vary by up to ±30 % between
+runs, so 1.5-2.9×) and 2.8× fewer cache misses. All of these are small in absolute terms: in C++ every
+transport is cheap. axon's latest-value-wins delivery dropped 0.1-0.2 % of the 200 Hz IMU frames when two
+arrived while the consumer was busy with camera frames; every other stream and transport delivered
+everything. A consumer that needs every sample of a fast stream must size for that. A fixed 1 kHz polling loop
+is cheaper still (0.015 cores) but makes a frame wait half a tick (557 µs).</p>
+
+<h3>5.2 Against ROS 2 inside one process <span class="v par">PARITY</span> / <span class="v no">NOT A WIN</span></h3>
+<p>Composing nodes into one process (intra-process <code>unique_ptr</code> or type adaptation) is ROS 2's
+answer to copy costs. axon across two processes is not slower than that: 4-5.5 µs faster with a
+spinning consumer against a <code>spin_some</code> loop (GPU 1 MiB: 24 vs 28 µs), 1.3-2 µs faster with
+both consumers blocking. That holds for copy-out consumers and with MPS. Without MPS, a consumer that launches
+a kernel pays the cross-process context switch, which one process does not: 129 µs with axon against 25 µs
+intra-process. The claim is "process isolation without a latency penalty, given MPS or a copy-out
+consumer", not a speed-up.</p>
+
+<h3>5.3 Low-rate producers and the CPU clock</h3>
+<p>At camera rates a producer core sits idle most of the time and the CPU lowers its clock. For a
+16 MiB host frame at 30 Hz the median doubled (about 420 vs 210 µs) with nothing in the transport
+changed. axon ships two tools for this, measured on the workstation: <code>CpuLatencyHold</code>
+(a per-CPU wake-up latency limit; 1 µs fixes the median but leaves a p90 of 419 µs) and
+<code>rt_sleep_until_prewarmed</code> (spin for 2 ms before a deadline; p50 / p90 211 / 216 µs for about
+6 % of a core at 30 Hz; after a kernel update one run's p90 was 318 µs, mostly not from the clock).</p>
+<figure><img src="figures/f8_lowrate_clock.svg" alt="Low-rate clock">
+<div class="cap">Figure 8. 16 MiB host producer at 30 Hz, p50 and p90 (upper end of two runs). Source:
+<code>benchmarks/ros2_cpp/README.md</code>, frame-clock probe. These are platform effects that hit every
+transport; the API makes them manageable, it does not make axon faster than another transport.</div></figure>
+
+<h2 class="pb">6. What does not show up as latency</h2>
+<table class="left">
+<thead><tr><th>Property</th><th>Measured</th><th>Grade</th></tr></thead>
+<tbody>
+<tr><td>Page faults in the RT loop</td><td>0 per frame, flat at 20× the frames (<code>docs/hardware-verification.md</code> §2)</td><td><span class="v strong">STRONG</span></td></tr>
+<tr><td>Transport syscalls per frame</td><td>about 0 socket syscalls per frame in a 1 kHz polling loop (§3 there); an event-driven consumer adds a futex wake when it sleeps. Shared-memory transports such as iceoryx2 share this property</td><td><span class="v cond">CONDITIONAL</span></td></tr>
+<tr><td>Memory-subsystem cost</td><td>vs ROS 2 zero-copy in C++, same window: 4.2× fewer cache misses, 5.3× fewer instructions (1 kHz loop)</td><td><span class="v cond">CONDITIONAL</span></td></tr>
+<tr><td>GPU buffer across processes</td><td>RTX 5080: 200/200 frames verified on the GPU, 0 host copies, 1.68 GB moved</td><td><span class="v strong">STRONG</span></td></tr>
+<tr><td>Camera → CUDA with no user-space copy</td><td>AGX Xavier: the camera driver writes the buffer another process's CUDA reads; host view == CUDA view on 30/30 frames</td><td><span class="v strong">STRONG</span></td></tr>
+<tr><td>Bounded staleness</td><td>a 7-term worst-case formula; staleness is measured on every view</td><td>design property</td></tr>
+</tbody></table>
+<div class="cap">Table 2. Properties that matter for real-time and power budgets but are not a latency ratio.</div>
+
+<h2>7. Camera to inference on a Jetson <span class="v cond">CONDITIONAL</span></h2>
+<p>The camera white paper (<i>Small cameras, big costs</i>, in this directory) measures a UVC camera
+feeding a ResNet-18 TensorRT engine in another process, stage by stage, 1,200 frames per cell. The
+zero-copy path lets the camera write into an <code>NvBufSurface</code> the consumer's kernel reads; the
+copy path copies the driver buffer into shared memory and then to the GPU.</p>
+<figure><img src="figures/f9_camera.svg" alt="Camera to inference">
+<div class="cap">Figure 9. Capture → inferred, median ms, GPU woken before each frame. Webcam: USB 2.0, YUYV 640×480,
+614 KB; OAK-D: USB 3, NV12 1280×800, 1.5 MB. Source: <code>docs/whitepapers/jetson-camera-e2e/numbers.json</code>
+(zero-copy for the OAK-D from the same session as its mapped and pinned runs).</div></figure>
+<ul>
+<li><b>The camera and the GPU clock dominate.</b> The webcam needs 32 ms from its timestamp to a usable
+frame; the OAK-D 3.3 ms. Inference takes 10.9 ms at the default 30 W clocks and 1.7 ms with
+<code>jetson_clocks</code>.</li>
+<li><b>Against a pageable copy</b> zero-copy shortens capture → inferred by 0.58 / 0.30 ms with the webcam (default /
+locked clocks) and 1.13 / 0.69 ms with the OAK-D, 11 % of the OAK-D's 6.2 ms at locked clocks.</li>
+<li><b>Against a mapped copy</b> (the shared frame registered with <code>cudaHostRegisterMapped</code>, the
+kernel reading it in place) the consumer side is the same within 0.04 ms; what is left is the
+producer's copy out of the driver buffer, 0.11 ms (webcam) and 0.25-0.35 ms (OAK-D), plus its CPU and
+memory traffic.</li>
+<li>The first GPU operation after the idle gap between 30 fps frames costs 0.3-1.1 ms, more than the
+webcam's copy; locking the clocks matters more than the transport for this pipeline.</li>
+</ul>
+<p>The honest claim for this path is therefore narrow: <b>the camera-buffer pool removes the last copy
+a well-built pipeline would still make</b>, worth 0.1-0.35 ms per camera per frame on this board, and
+more than that only against the common pageable-copy pipeline.</p>
+
+<h2>8. Real-time behaviour</h2>
+<h3>8.1 Transport determinism</h3>
+<p>The transport adds no page faults and no syscalls per frame (§6), so in an RT loop its own jitter is
+the seqlock read and a cache miss or two. What decides the loop's worst case is the platform.</p>
+<h3>8.2 Platform jitter on the Jetson <span class="v no">NOT A WIN</span> (not a transport property)</h3>
+<figure><img src="figures/f10_rt_jitter.svg" alt="RT jitter">
+<div class="cap">Figure 10. 1 kHz <code>cyclictest</code> worst case on AGX Xavier. Source:
+<code>docs/hardware-verification.md</code> §7.</div></figure>
+<p>PREEMPT_RT alone leaves 1.1-1.3 ms spikes on Xavier; isolating CPUs 4-7 removes them under load (133 /
+226 µs idle / load at 30 W, 74 / 148 µs at MAXN with locked clocks). The 100 µs target for a 1 kHz loop
+is met only idle at MAXN. One run per row, and the isolated runs used a lighter load (four stress
+workers instead of eight), so their improvement under load is indicative. These numbers describe the board and its kernel configuration, which axon
+documents and checks (<code>board_doctor.sh</code>), not a property axon brings.</p>
+
+<h2 class="pb">9. Claims we do not make</h2>
+<div class="avoid"><b>"20.9× faster / 3.3× less CPU / 8.6× fewer cache misses than ROS 2."</b> Early numbers
+measured rclpy (Python) on the ROS 2 side. Redone in C++ against ROS 2's zero-copy path, the host gap is
+1.3-2.2× (§4.1) and the cache-miss gap 2.8-4.2× (§5.1, §6).</div>
+<div class="avoid"><b>"5× faster than the GPU ROS 2 transports."</b> True only without MPS and for a consumer
+that copies results out (§3.2).</div>
+<div class="avoid"><b>"36× faster VLM encoder → LLM handoff."</b> That compares axon with a naive host round
+trip in one demo, not with another transport.</div>
+<div class="avoid"><b>Retracted after review.</b> "axon is 7 % slower at 64 MiB" (not reproduced; the first run
+had 7 % more CPU cycles) and "the Jetson kernel reads the camera buffer 4.7× slower" (it was the GPU
+waking up between frames; a warm-up control removed it).</div>
+
+<h2>10. Recommended wording</h2>
+<div class="quote">"Across processes, axon hands a GPU tensor to a consumer that copies results out in 24-26 µs from
+147 KiB to 4 MiB: 7-19× lower latency than ROS 2's zero-copy path at 1-4 MiB. With CUDA MPS the same holds
+for consumers that run kernels."</div>
+<div class="quote">"With eight GPU subscribers, 12× less CPU than ROS 2's zero-copy path (6× with default
+CPU idle states)."</div>
+<div class="quote">"Against ROS 2 transports that also share GPU memory, 1.4-2× lower latency with CUDA MPS."</div>
+<div class="quote">"On the host, as fast as iceoryx2 up to 4 MiB and 4-19 µs per message ahead of ROS 2's
+zero-copy path."</div>
+<div class="quote">"On Jetson, the camera driver writes straight into the buffer another process's CUDA kernel
+reads, with no user-space copy: 0.1-0.35 ms per frame less than a mapped-memory pipeline and up to 1.1 ms
+less than a pageable one, capture to inference."</div>
+
+<h2>11. Limitations</h2>
+<ul>
+<li>One workstation and one Jetson; one physical machine per comparison. Other CPUs, GPUs and
+cpufreq setups will move the absolute numbers; the structure (D2H + H2D vs a handoff, context switches,
+clock effects) should carry over.</li>
+<li>The workstation had a CPU fault during some runs (cores offline, stated in each table); results were
+re-gated, but they are from one machine.</li>
+<li>No PREEMPT_RT or <code>isolcpus</code> runs on the workstation; the tail-under-load comparison is with
+pinned processes only.</li>
+<li>The Jetson consumer kernel samples a fraction of each frame; a consumer that reads every byte may see
+different costs for mapped memory.</li>
+<li>Not measured: NITROS / type adaptation and EventsExecutor, rmw_zenoh with loans, eight kernel-launching
+GPU subscribers without MPS, and consumers that read every byte of a mapped frame.</li>
+<li>Medians of two or three runs; run-to-run spread is in the source tables and is small for medians,
+large for p99 under load.</li>
+</ul>
+
+<h2>12. Sources and reproduction</h2>
+<table class="left">
+<thead><tr><th>Section</th><th>Source in the repository</th><th>PRs</th></tr></thead>
+<tbody>
+<tr><td>§3 GPU</td><td><code>benchmarks/ros2_cpp/README.md</code> (GPU sections, fan-out), <code>results/</code></td><td>#43, #47-#49</td></tr>
+<tr><td>§4 host</td><td>same file: payload sweep, ring depth, tail under load</td><td>#43, #49-#51, #57</td></tr>
+<tr><td>§5 workloads</td><td>README "Measured Results"; same file: multi-stream, same process, frame-clock probe</td><td>#44-#46, #48, #52-#56</td></tr>
+<tr><td>§6 properties</td><td><code>docs/hardware-verification.md</code> §1-§4, §6</td><td>#11-#13, #19, #31, #36-#38</td></tr>
+<tr><td>§7 camera</td><td><code>docs/whitepapers/jetson-camera-e2e/</code>, <code>instrumentation/jetson/e2e/results/</code></td><td>#60-#65</td></tr>
+<tr><td>§8 RT</td><td><code>docs/hardware-verification.md</code> §7, <code>instrumentation/jetson/rt/results/</code></td><td>#42, #58</td></tr>
+</tbody></table>
+<p class="note">The figures are drawn by <code>make_figures.py</code> next to this file from the values in those
+tables (each block names its source; the camera numbers are read from the camera paper's
+<code>numbers.json</code>). <code>build.sh</code> rebuilds the figures and prints this page to PDF.</p>
+
+</body>
+</html>

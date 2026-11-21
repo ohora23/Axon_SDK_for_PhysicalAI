@@ -67,6 +67,7 @@ flowchart LR
 | VLM 인코더→LLM 핸드오프 (video 34 MB) | host 왕복 대비 **36× 빠름** |
 | Jetson(AGX Xavier)에서 실제 카메라 → CUDA | **복사 0**: 카메라가 쓴 버퍼를 다른 프로세스의 CUDA가 그대로 읽음 |
 
+이 수치 중 무엇을 어떤 조건에서 주장해도 되는지: **[What axon's numbers support](docs/whitepapers/axon-performance-claims.pdf)**(성능 주장 검증 백서, 영문 12쪽).
 자세한 내용은 [측정 결과](#측정-결과), 신선도 보장은 [목표 지표와 실측](#목표-지표와-실측)에 있다.
 
 ---

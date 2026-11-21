@@ -67,6 +67,7 @@ Green = payload, referenced in place and never copied. Blue = the only thing tha
 | VLM encoder→LLM handoff (video 34 MB) | **36× faster** than a host round-trip |
 | Real camera → CUDA on a Jetson (AGX Xavier) | **0 copies**: the camera writes the buffer another process's CUDA reads |
 
+Which of these to quote, and under what conditions: **[What axon's numbers support](docs/whitepapers/axon-performance-claims.pdf)** (claims audit, 12 pages).
 Full detail in [Measured Results](#measured-results); the staleness guarantee is in [Target Metrics](#target-metrics--and-what-we-measured).
 
 ---

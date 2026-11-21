@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIG = os.path.join(HERE, "figures")
 CAM = json.load(open(os.path.join(HERE, "..", "jetson-camera-e2e", "numbers.json")))
-plt.rcParams.update({"font.size": 9, "font.family": "DejaVu Sans", "axes.spines.top": False, "axes.spines.right": False})
+plt.rcParams.update({"font.size": 9, "font.family": ["Noto Sans", "DejaVu Sans"], "axes.spines.top": False, "axes.spines.right": False})
 AX, ROS, IOX, RB, CI, CY, ZN = "#1f6fb2", "#c4651c", "#2e8b57", "#8e5ea2", "#b8860b", "#7f8c8d", "#a0a0a0"
 WIN, MOD, PAR, LOSS = "#1f6fb2", "#6fa8dc", "#b0b7bf", "#c4651c"
 

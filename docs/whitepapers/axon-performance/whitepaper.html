@@ -3,30 +3,32 @@
 <head>
 <meta charset="utf-8">
 <title>What axon's numbers support: a performance claims audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   @page { size: A4; margin: 17mm 16mm 17mm 16mm; }
-  body { font-family: "DejaVu Serif", Georgia, serif; font-size: 10pt; line-height: 1.45; color: #1a1a1a; max-width: 182mm; margin: 0 auto; }
-  h1 { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 19pt; line-height: 1.2; margin: 0 0 4pt; }
-  h2 { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 12.5pt; margin: 16pt 0 5pt; border-bottom: 0.6pt solid #999; padding-bottom: 2pt; }
-  h3 { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 10.5pt; margin: 11pt 0 3pt; }
-  .sub { font-family: "DejaVu Sans", Arial, sans-serif; color: #444; font-size: 10.5pt; margin-bottom: 2pt; }
-  .meta { font-family: "DejaVu Sans", Arial, sans-serif; color: #666; font-size: 8.5pt; margin-bottom: 10pt; }
+  body { font-family: "Inter", "Noto Sans", "Helvetica Neue", Arial, sans-serif; font-size: 9.6pt; line-height: 1.55; color: #16181b; font-feature-settings: "cv11", "ss01"; -webkit-font-smoothing: antialiased; max-width: 182mm; margin: 0 auto; }
+  h1 { font-family: "Inter", "Noto Sans", "Helvetica Neue", Arial, sans-serif; font-weight: 700; letter-spacing: -0.01em; font-size: 19pt; line-height: 1.2; margin: 0 0 4pt; }
+  h2 { font-family: "Inter", "Noto Sans", "Helvetica Neue", Arial, sans-serif; font-weight: 600; font-size: 12.5pt; margin: 16pt 0 5pt; border-bottom: 0.6pt solid #999; padding-bottom: 2pt; }
+  h3 { font-family: "Inter", "Noto Sans", "Helvetica Neue", Arial, sans-serif; font-weight: 600; font-size: 10.3pt; margin: 11pt 0 3pt; }
+  .sub { font-family: "Inter", "Noto Sans", "Helvetica Neue", Arial, sans-serif; color: #444; font-size: 10.5pt; margin-bottom: 2pt; }
+  .meta { font-family: "Inter", "Noto Sans", "Helvetica Neue", Arial, sans-serif; color: #666; font-size: 8.5pt; margin-bottom: 10pt; }
   .abstract { background: #f3f5f7; border-left: 3pt solid #1f6fb2; padding: 7pt 10pt; margin: 8pt 0 6pt; }
   .key { border: 0.6pt solid #1f6fb2; padding: 6pt 10pt; margin: 8pt 0; }
   .key li { margin: 2pt 0; }
-  table { border-collapse: collapse; width: 100%; font-family: "DejaVu Sans", Arial, sans-serif; font-size: 8.2pt; margin: 6pt 0 4pt; page-break-inside: avoid; }
+  table { font-variant-numeric: tabular-nums; border-collapse: collapse; width: 100%; font-family: "Inter", "Noto Sans", "Helvetica Neue", Arial, sans-serif; font-size: 8.2pt; margin: 6pt 0 4pt; page-break-inside: avoid; }
   th, td { border-bottom: 0.4pt solid #bbb; padding: 2.5pt 4pt; text-align: right; vertical-align: top; }
   th:first-child, td:first-child { text-align: left; }
   thead th { border-bottom: 0.9pt solid #333; }
   table.left td, table.left th { text-align: left; }
-  .cap { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 8.2pt; color: #444; margin: 2pt 0 10pt; }
+  .cap { font-family: "Inter", "Noto Sans", "Helvetica Neue", Arial, sans-serif; font-size: 8.2pt; color: #444; margin: 2pt 0 10pt; }
   figure { margin: 8pt 0; page-break-inside: avoid; }
   figure img { width: 100%; }
-  code { font-family: "DejaVu Sans Mono", monospace; font-size: 8.4pt; }
-  pre { font-family: "DejaVu Sans Mono", monospace; font-size: 7.8pt; background: #f6f6f6; padding: 5pt 7pt; white-space: pre-wrap; page-break-inside: avoid; }
+  code { font-family: "JetBrains Mono", "Noto Sans Mono", "DejaVu Sans Mono", monospace; font-size: 8.4pt; }
+  pre { font-family: "JetBrains Mono", "Noto Sans Mono", "DejaVu Sans Mono", monospace; font-size: 7.8pt; background: #f6f6f6; padding: 5pt 7pt; white-space: pre-wrap; page-break-inside: avoid; }
   .note { font-size: 8.8pt; color: #333; }
   .pb { page-break-before: always; }
-  .v { font-family: "DejaVu Sans", Arial, sans-serif; font-weight: bold; font-size: 7.6pt; padding: 0.5pt 4pt; border-radius: 2pt; white-space: nowrap; }
+  .v { font-family: "Inter", "Noto Sans", "Helvetica Neue", Arial, sans-serif; font-weight: bold; font-size: 7.6pt; padding: 0.5pt 4pt; border-radius: 2pt; white-space: nowrap; }
   .strong { background: #1f6fb2; color: #fff; } .cond { background: #6fa8dc; color: #fff; }
   .par { background: #b0b7bf; color: #222; } .no { background: #c4651c; color: #fff; }
   .quote { border-left: 2pt solid #2e8b57; padding: 2pt 8pt; margin: 4pt 0; background: #f4faf6; }

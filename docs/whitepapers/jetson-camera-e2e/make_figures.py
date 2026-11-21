@@ -48,7 +48,7 @@ for c in CELLS + CELLS2 + CELLS3:
         num[f"{c}/{m}"]["capture_to_publish"]["min"] = round(min(data[(c, m)]["capture_to_publish"]), 1)
 json.dump(num, open(os.path.join(HERE, "numbers.json"), "w"), indent=1)
 
-plt.rcParams.update({"font.size": 9, "font.family": "DejaVu Sans", "axes.spines.top": False, "axes.spines.right": False})
+plt.rcParams.update({"font.size": 9, "font.family": ["Noto Sans", "DejaVu Sans"], "axes.spines.top": False, "axes.spines.right": False})
 C_ZC, C_CP = "#1f6fb2", "#c4651c"
 
 # Fig 2: median stage breakdown, receive -> inferred, warm cells

@@ -4,6 +4,7 @@
 #   run_e2e.sh <build_dir> <engine.plan> [frames=600] [reps=2] [tag=run]
 #     ->  results/<tag>/e2e_<mode>_r<rep>.{csv,txt}, env.txt (with GPU clocks and E2E_WARM_GPU)
 # E2E_WARM_GPU=1 is passed through to the consumer.
+# E2E_FORMAT, E2E_WIDTH, E2E_HEIGHT, E2E_DEVICE are inherited from the environment.
 set -u
 BUILD=${1:?usage: run_e2e.sh <build_dir> <engine.plan> [frames] [reps] [tag]}
 ENGINE=${2:?engine.plan}
@@ -15,8 +16,11 @@ OUT=$(cd "$(dirname "$0")" && pwd)/results/$TAG
 mkdir -p "$OUT"
 [ -x "$BIN" ] || { echo "no $BIN (build with AXON_ENABLE_JETSON=ON AXON_WITH_CUDA=ON)" >&2; exit 1; }
 
+E2E_DEVICE=${E2E_DEVICE:-/dev/video0}
+
 { uname -a; nvpmodel -q 2>/dev/null | head -1; echo "isolated=$(cat /sys/devices/system/cpu/isolated)"
-  v4l2-ctl -d /dev/video0 --get-fmt-video 2>/dev/null; echo "engine=$ENGINE frames=$FRAMES reps=$REPS E2E_WARM_GPU=${E2E_WARM_GPU:-0}"
+  v4l2-ctl -d "$E2E_DEVICE" --get-fmt-video 2>/dev/null; echo "engine=$ENGINE frames=$FRAMES reps=$REPS E2E_WARM_GPU=${E2E_WARM_GPU:-0}"
+  echo "E2E_FORMAT=${E2E_FORMAT:-YUYV} E2E_WIDTH=${E2E_WIDTH:-640} E2E_HEIGHT=${E2E_HEIGHT:-480} device=$E2E_DEVICE"
   gpu=$(ls -d /sys/class/devfreq/*.gv11b /sys/class/devfreq/*.ga10b 2>/dev/null | head -1)   # Xavier, Orin
   [ -n "$gpu" ] && echo "gpu_freq cur=$(cat $gpu/cur_freq) min=$(cat $gpu/min_freq) max=$(cat $gpu/max_freq)" || echo "gpu_freq unknown"
   echo "cpu4 min=$(cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_min_freq) max=$(cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_max_freq)"
@@ -24,9 +28,10 @@ mkdir -p "$OUT"
 
 PP=""
 trap '[ -n "$PP" ] && kill "$PP" 2>/dev/null' EXIT
+export E2E_FORMAT E2E_WIDTH E2E_HEIGHT
 for rep in $(seq 1 "$REPS"); do
   for mode in zerocopy copy; do
-    taskset -c 0-3 "$BIN" producer "$mode" /dev/video0 > "$OUT/producer_${mode}_r$rep.log" 2>&1 & PP=$!
+    taskset -c 0-3 "$BIN" producer "$mode" "$E2E_DEVICE" > "$OUT/producer_${mode}_r$rep.log" 2>&1 & PP=$!
     sleep 1
     taskset -c 4 "$BIN" consumer "$mode" "$ENGINE" "$FRAMES" "$OUT/e2e_${mode}_r$rep.csv" | tee "$OUT/e2e_${mode}_r$rep.txt"
     rc=${PIPESTATUS[0]}

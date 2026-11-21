@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // axon Jetson demo — camera → TensorRT inference, end to end, zero-copy against a copy path.
 //
-//   producer zerocopy /dev/videoN [frames]: the driver writes each frame into an NvBufSurface pool
-//            slot (as in jetson_camera; no user-space copy); the consumer gets its CUDA pointer.
-//   producer copy /dev/videoN [frames]: V4L2 MMAP buffers, memcpy'd into a host (memfd) pool;
-//            the consumer copies the frame to the GPU (pageable H2D) before using it.
-//   consumer zerocopy|copy <engine.plan> <frames> <out.csv>: YUYV → normalised NCHW on the GPU,
-//            then TensorRT; one CSV row per frame and a per-stage summary. E2E_WARM_GPU=1 runs a
-//            small kernel before each frame is taken (it lands in publish → received), so the first
-//            timed GPU step does not also pay for waking the GPU between frames.
+//   producer zerocopy|copy /dev/videoN [frames]: the driver writes each frame into a pool
+//            (NvBufSurface for zerocopy, host for copy). E2E_FORMAT=YUYV|NV12 (default YUYV),
+//            E2E_WIDTH=W (default 640), E2E_HEIGHT=H (default 480).
+//            For NV12 a GREY pool W×(H*3/2) is used (Y plane + interleaved UV plane).
+//   consumer zerocopy|copy <engine.plan> <frames> <out.csv>: YUYV or NV12 → normalised NCHW on
+//            the GPU, then TensorRT; one CSV row per frame and a per-stage summary. E2E_WARM_GPU=1
+//            runs a small kernel before each frame is taken (it lands in publish → received), so
+//            the first timed GPU step does not also pay for waking the GPU between frames.
 //
 // All timestamps are CLOCK_MONOTONIC_RAW (axon::rt_now_ns). The capture time is the V4L2 buffer
 // timestamp (CLOCK_MONOTONIC) moved to MONOTONIC_RAW with the offset read at DQBUF.
@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstdint>
+#include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -43,7 +44,60 @@ using namespace axon;
 
 namespace {
 
-constexpr std::uint32_t kW = 640, kH = 480, kFrameBytes = kW * kH * 2;
+struct FrameConfig {
+    unsigned w, h;
+    unsigned rows;
+    unsigned row_bytes;
+    unsigned frame_bytes;
+    unsigned fourcc;
+    unsigned pool_height;
+    unsigned pool_fourcc;
+};
+
+static std::int32_t parse_env(FrameConfig& cfg) {
+    const char* fmt = getenv("E2E_FORMAT");
+    if (!fmt) fmt = "YUYV";
+    if (strcmp(fmt, "YUYV") != 0 && strcmp(fmt, "NV12") != 0) {
+        fprintf(stderr, "E2E_FORMAT must be YUYV or NV12\n");
+        return 2;
+    }
+    const bool is_nv12 = strcmp(fmt, "NV12") == 0;
+
+    const char* wv = getenv("E2E_WIDTH");
+    unsigned ew = 640;
+    if (wv && strlen(wv) > 0) {
+        char* e;
+        const unsigned long v = strtoul(wv, &e, 10);   // full width first: no wrap before the range check
+        if (*e != '\0' || v == 0 || v > 8192 || wv[0] == '-') {
+            fprintf(stderr, "E2E_WIDTH must be an integer in 1..8192\n");
+            return 2;
+        }
+        ew = static_cast<unsigned>(v);
+    }
+
+    const char* hv = getenv("E2E_HEIGHT");
+    unsigned eh = 480;
+    if (hv && strlen(hv) > 0) {
+        char* e;
+        const unsigned long v = strtoul(hv, &e, 10);
+        if (*e != '\0' || v == 0 || v > 8192 || hv[0] == '-') {
+            fprintf(stderr, "E2E_HEIGHT must be an integer in 1..8192\n");
+            return 2;
+        }
+        eh = static_cast<unsigned>(v);
+    }
+
+    cfg.w = ew;
+    cfg.h = eh;
+    cfg.fourcc = is_nv12 ? V4L2_PIX_FMT_NV12 : V4L2_PIX_FMT_YUYV;
+    cfg.row_bytes = is_nv12 ? ew : 2 * ew;
+    cfg.rows = is_nv12 ? eh + (eh + 1) / 2 : eh;   // NV12: Y rows + ceil(H/2) UV rows
+    cfg.frame_bytes = cfg.rows * cfg.row_bytes;
+    cfg.pool_height = cfg.rows;
+    cfg.pool_fourcc = is_nv12 ? V4L2_PIX_FMT_GREY : cfg.fourcc;
+    return 0;
+}
+
 constexpr std::size_t kBuffers = 6;     // pool slots (as jetson_camera)
 constexpr std::uint32_t kMmapBuffers = 4;
 const char* kService = "jetson/e2e";
@@ -74,33 +128,34 @@ std::uint64_t capture_raw_ns(const v4l2_buffer& b) {
     return static_cast<std::uint64_t>(mono - off);
 }
 
-int set_format(int v, std::uint32_t pitch) {
+int set_format(int v, std::uint32_t pitch, const FrameConfig& cfg) {
     v4l2_format fmt{};
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    fmt.fmt.pix.width = kW;
-    fmt.fmt.pix.height = kH;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+    fmt.fmt.pix.width = cfg.w;
+    fmt.fmt.pix.height = cfg.h;
+    fmt.fmt.pix.pixelformat = cfg.fourcc;
     fmt.fmt.pix.bytesperline = pitch;
     fmt.fmt.pix.field = V4L2_FIELD_NONE;
     if (xioctl(v, VIDIOC_S_FMT, &fmt) < 0 || fmt.fmt.pix.bytesperline != pitch ||
-        fmt.fmt.pix.width != kW || fmt.fmt.pix.height != kH) {
-        fprintf(stderr, "camera can't do %ux%u YUYV at pitch %u\n", kW, kH, pitch);
+        fmt.fmt.pix.width != cfg.w || fmt.fmt.pix.height != cfg.h) {
+        const char* fmt_name = (cfg.fourcc == V4L2_PIX_FMT_NV12) ? "NV12" : "YUYV";
+        fprintf(stderr, "camera can't do %ux%u %s at pitch %u\n", cfg.w, cfg.h, fmt_name, pitch);
         return -1;
     }
     return 0;
 }
 
-void fill(AcquiredDescriptor& a, std::uint32_t pitch, const v4l2_buffer& b) {
+void fill(AcquiredDescriptor& a, std::uint32_t pitch, const v4l2_buffer& b, const FrameConfig& cfg) {
     a.desc->rank = 2;
-    a.desc->shape[0] = kH;
-    a.desc->shape[1] = kW * 2;
+    a.desc->shape[0] = cfg.rows;
+    a.desc->shape[1] = cfg.row_bytes;
     a.desc->dtype = DType::U8;
     a.desc->layout = TensorLayout::HW;
     a.desc->offset = 0;
-    a.desc->size = static_cast<std::uint64_t>(pitch) * kH;
     a.desc->row_pitch = pitch;
     a.desc->capture_ts_ns = capture_raw_ns(b);
     a.desc->capture_clock = CaptureClock::MonotonicRaw;
+    a.desc->size = static_cast<std::uint64_t>(pitch) * cfg.rows;
 }
 
 int qbuf_dmabuf(int v, const TensorPool& pool, int index) {
@@ -114,16 +169,16 @@ int qbuf_dmabuf(int v, const TensorPool& pool, int index) {
 }
 
 // Camera → NvBufSurface pool, no copy (the jetson_camera producer plus capture timestamps).
-int producer_zerocopy(const char* dev, long frames) {
-    TensorPoolConfig cfg{kBuffers, 0, PoolBackend::NvBufSurface, nullptr};
-    cfg.width = kW;
-    cfg.height = kH;
-    cfg.fourcc = V4L2_PIX_FMT_YUYV;
-    auto pool = TensorPool::create(cfg);
+int producer_zerocopy(const char* dev, long frames, const FrameConfig& cfg) {
+    TensorPoolConfig tcfg{kBuffers, 0, PoolBackend::NvBufSurface, nullptr};
+    tcfg.width = cfg.w;
+    tcfg.height = cfg.pool_height;
+    tcfg.fourcc = cfg.pool_fourcc;
+    auto pool = TensorPool::create(tcfg);
     if (!pool) { perror("NvBufSurface pool"); return 1; }
     int v = open(dev, O_RDWR);
     if (v < 0) { perror(dev); return 1; }
-    if (set_format(v, pool->row_pitch()) < 0) return 1;
+    if (set_format(v, pool->row_pitch(), cfg) < 0) return 1;
     v4l2_requestbuffers rb{};
     rb.count = kBuffers;
     rb.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -149,7 +204,7 @@ int producer_zerocopy(const char* dev, long frames) {
         if (b.flags & V4L2_BUF_FLAG_ERROR) fprintf(stderr, "producer: frame %ld flagged corrupt by the driver\n", n);
         AcquiredDescriptor a = pub->acquire_descriptor();
         a.buffer_index = static_cast<int>(b.index);   // the camera picked the slot
-        fill(a, pool->row_pitch(), b);
+        fill(a, pool->row_pitch(), b, cfg);
         if (pub->publish(std::move(a)) < 0) perror("publish");
         if (qbuf_dmabuf(v, *pool, held) < 0) { perror("re-QBUF"); break; }
         held = static_cast<int>(b.index);
@@ -160,12 +215,12 @@ int producer_zerocopy(const char* dev, long frames) {
 }
 
 // Camera → driver MMAP buffer → memcpy into a host pool slot (the usual copying pipeline).
-int producer_copy(const char* dev, long frames) {
-    auto pool = TensorPool::create(TensorPoolConfig{kBuffers, kFrameBytes, PoolBackend::Custom, nullptr});
+int producer_copy(const char* dev, long frames, const FrameConfig& cfg) {
+    auto pool = TensorPool::create(TensorPoolConfig{kBuffers, cfg.frame_bytes, PoolBackend::Custom, nullptr});
     if (!pool) { perror("host pool"); return 1; }
     int v = open(dev, O_RDWR);
     if (v < 0) { perror(dev); return 1; }
-    if (set_format(v, kW * 2) < 0) return 1;
+    if (set_format(v, cfg.row_bytes, cfg) < 0) return 1;
     v4l2_requestbuffers rb{};
     rb.count = kMmapBuffers;
     rb.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -197,9 +252,10 @@ int producer_copy(const char* dev, long frames) {
         b.memory = V4L2_MEMORY_MMAP;
         if (xioctl(v, VIDIOC_DQBUF, &b) < 0) { perror("DQBUF"); break; }
         if (b.flags & V4L2_BUF_FLAG_ERROR) fprintf(stderr, "producer: frame %ld flagged corrupt by the driver\n", n);
+        if (b.bytesused < cfg.frame_bytes) fprintf(stderr, "producer: frame %ld short (%u of %u bytes)\n", n, b.bytesused, cfg.frame_bytes);
         AcquiredDescriptor a = pub->acquire_descriptor();   // the pool picks the slot
-        std::memcpy(a.host_view, maps[b.index], kFrameBytes);
-        fill(a, kW * 2, b);
+        std::memcpy(a.host_view, maps[b.index], cfg.frame_bytes);
+        fill(a, cfg.row_bytes, b, cfg);
         if (pub->publish(std::move(a)) < 0) perror("publish");
         if (xioctl(v, VIDIOC_QBUF, &b) < 0) { perror("re-QBUF"); break; }
     }
@@ -233,7 +289,7 @@ void summary(const char* label, std::vector<double> us) {
     printf("  %-12s p50 %8.1f  p90 %8.1f  p99 %8.1f  max %8.1f us\n", label, at(0.5), at(0.9), at(0.99), us.back());
 }
 
-int consumer(bool zerocopy, const char* engine_path, long frames, const char* out_csv) {
+int consumer(bool zerocopy, const char* engine_path, long frames, const char* out_csv, const FrameConfig& cfg) {
     CK(cudaSetDevice(0));
     CK(cudaFree(nullptr));   // bind the primary context (axon's CUDA import uses it too)
     cudaStream_t stream;
@@ -267,7 +323,7 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
     void* d_stage = nullptr;
     CK(cudaMalloc(&d_in, sizeof(float) * 3 * net_h * net_w));
     CK(cudaMalloc(&d_out, sizeof(float) * n_out));
-    if (!zerocopy) CK(cudaMalloc(&d_stage, kFrameBytes));
+    if (!zerocopy) CK(cudaMalloc(&d_stage, cfg.frame_bytes));
     if (!ctx->setTensorAddress(in_name, d_in) || !ctx->setTensorAddress(out_name, d_out)) {
         fprintf(stderr, "setTensorAddress failed\n");
         return 1;
@@ -275,7 +331,7 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
     const bool warm_gpu = getenv("E2E_WARM_GPU") && atoi(getenv("E2E_WARM_GPU"));
     std::vector<float> scores(static_cast<std::size_t>(n_out));
     printf("consumer(%s): engine %s [1,3,%d,%d] -> %lld\n", zerocopy ? "zerocopy" : "copy", engine_path, net_h,
-           net_w, static_cast<long long>(n_out));
+            net_w, static_cast<long long>(n_out));
 
     auto sub = TensorSubscriber::create(kService);
     if (!sub || sub->wait_handshake(15000) != 0) { perror("handshake"); return 1; }
@@ -288,6 +344,7 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
     long seen = 0, recorded = 0, skipped = 0;
     std::uint64_t last = 0;
     int idle_ms = 0;
+    int first = 1;
     while (recorded < frames) {
         const int w = sub->wait_for_update(1000);
         if (w < 0) { perror("wait_for_update"); return 1; }
@@ -303,6 +360,18 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
         auto v = sub->latest_view();
         if (!v || v->seqno == last) continue;
         const std::uint64_t t_view = rt_now_ns();
+
+        if (first) {
+            first = 0;
+            if (v->shape.rank == 2 && (v->shape.dims[0] != cfg.rows || v->shape.dims[1] != cfg.row_bytes)) {
+                fprintf(stderr, "producer and consumer formats differ (producer %" PRIu32 "x%" PRIu32 ", consumer %ux%u)\n",
+                        static_cast<uint32_t>(v->shape.dims[0]), static_cast<uint32_t>(v->shape.dims[1]),
+                        cfg.rows, cfg.row_bytes);
+                fclose(csv);
+                return 1;
+            }
+        }
+
         if (last && v->seqno > last + 1 && seen >= warmup) skipped += static_cast<long>(v->seqno - last - 1);
         last = v->seqno;
 
@@ -311,12 +380,21 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
             src = static_cast<const std::uint8_t*>(v->device_ptr);
             if (!src) { fprintf(stderr, "no CUDA view of the frame\n"); return 1; }
         } else {
-            CK(cudaMemcpyAsync(d_stage, v->data, kFrameBytes, cudaMemcpyHostToDevice, stream));
+            if (v->row_pitch != cfg.row_bytes) {   // d_stage holds a packed frame; a padded (zerocopy) producer would overflow it
+                fprintf(stderr, "copy consumer needs a packed frame (row_pitch %u, expected %u): is the producer in zerocopy mode?\n",
+                        v->row_pitch, cfg.row_bytes);
+                return 1;
+            }
+            CK(cudaMemcpyAsync(d_stage, v->data, cfg.frame_bytes, cudaMemcpyHostToDevice, stream));
             CK(cudaStreamSynchronize(stream));
             src = static_cast<const std::uint8_t*>(d_stage);
         }
         const std::uint64_t t_gpu = rt_now_ns();
-        CK(launch_yuyv_to_nchw(src, kW, kH, v->row_pitch, d_in, net_w, net_h, stream));
+        if (cfg.fourcc == V4L2_PIX_FMT_NV12) {
+            CK(launch_nv12_to_nchw(src, cfg.w, cfg.h, v->row_pitch, v->row_pitch * cfg.h, d_in, net_w, net_h, stream));
+        } else {
+            CK(launch_yuyv_to_nchw(src, cfg.w, cfg.h, v->row_pitch, d_in, net_w, net_h, stream));
+        }
         CK(cudaStreamSynchronize(stream));
         const std::uint64_t t_pre = rt_now_ns();
         if (!ctx->enqueueV3(stream)) { fprintf(stderr, "enqueueV3 failed\n"); return 1; }
@@ -343,7 +421,7 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
     }
     fclose(csv);
     printf("consumer(%s%s): %ld frames -> %s, %ld frames skipped (consumer behind)\n", zerocopy ? "zerocopy" : "copy",
-           warm_gpu ? ", GPU pre-warmed" : "", recorded, out_csv, skipped);
+            warm_gpu ? ", GPU pre-warmed" : "", recorded, out_csv, skipped);
     summary("cap_to_pub", cap_pub);
     summary("pub_to_view", pub_view);
     summary("view_to_gpu", view_gpu);
@@ -361,15 +439,19 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
 
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
+    FrameConfig cfg;
+    std::int32_t rc = parse_env(cfg);
+    if (rc != 0) return rc;
     if (argc >= 4 && !strcmp(argv[1], "producer") && (!strcmp(argv[2], "zerocopy") || !strcmp(argv[2], "copy"))) {
         const long frames = argc > 4 ? atol(argv[4]) : 0;
-        return !strcmp(argv[2], "zerocopy") ? producer_zerocopy(argv[3], frames) : producer_copy(argv[3], frames);
+        return !strcmp(argv[2], "zerocopy") ? producer_zerocopy(argv[3], frames, cfg) : producer_copy(argv[3], frames, cfg);
     }
     if (argc >= 6 && !strcmp(argv[1], "consumer") && (!strcmp(argv[2], "zerocopy") || !strcmp(argv[2], "copy")))
-        return consumer(!strcmp(argv[2], "zerocopy"), argv[3], atol(argv[4]), argv[5]);
+        return consumer(!strcmp(argv[2], "zerocopy"), argv[3], atol(argv[4]), argv[5], cfg);
     fprintf(stderr,
             "usage: %s producer zerocopy|copy /dev/videoN [frames]\n"
-            "       %s consumer zerocopy|copy <engine.plan> <frames> <out.csv>\n",
+            "       %s consumer zerocopy|copy <engine.plan> <frames> <out.csv>\n"
+            "environment: E2E_FORMAT=YUYV|NV12  E2E_WIDTH=W  E2E_HEIGHT=H  (defaults: YUYV 640 480)\n",
             argv[0], argv[0]);
     return 2;
 }

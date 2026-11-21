@@ -9,3 +9,7 @@ g++ -O2 -std=c++17 -Wall nvbuf_probe.cpp -o nvbuf_probe \
     -Wl,-rpath,/usr/lib/aarch64-linux-gnu/tegra \
     -lnvbufsurface -lcuda -lEGL
 echo "built: $(pwd)/nvbuf_probe"
+g++ -O2 -std=c++17 -Wall uvc_dmabuf_probe.cpp -o uvc_dmabuf_probe \
+    -I"$MMAPI/include" -L/usr/lib/aarch64-linux-gnu/tegra \
+    -Wl,-rpath,/usr/lib/aarch64-linux-gnu/tegra -lnvbufsurface
+echo "built: $(pwd)/uvc_dmabuf_probe"

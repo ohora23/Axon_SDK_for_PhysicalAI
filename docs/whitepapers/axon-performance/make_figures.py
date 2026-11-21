@@ -241,4 +241,31 @@ ax.legend(frameon=False, fontsize=7.5, loc="lower right")
 fig.tight_layout()
 save(fig, "f10_rt_jitter.svg")
 
+# ---------------- README hero: GPU across processes vs ROS 2 zero-copy ----------------
+fig, (a1, a2) = plt.subplots(1, 2, figsize=(8.4, 3.0), gridspec_kw={"width_ratios": [1.15, 1]})
+x = range(3)
+r = GPU["default"]["ROS 2 loaned + data-sharing"]; a = GPU["default"]["axon"]
+a1.bar([i - 0.2 for i in x], r, width=0.4, color=ROS, label="ROS 2 zero-copy (loaned + data-sharing)")
+a1.bar([i + 0.2 for i in x], a, width=0.4, color=AX, label="axon")
+for i in x:
+    a1.text(i - 0.2, r[i] + 8, str(r[i]), ha="center", fontsize=7.5)
+    a1.text(i + 0.2, a[i] + 8, str(a[i]), ha="center", fontsize=7.5, color=AX, fontweight="bold")
+    a1.text(i, max(r[i], a[i]) + 55, f"{r[i] / a[i]:.1f}×", ha="center", fontsize=9, fontweight="bold")
+a1.set_xticks(list(x), SIZES)
+a1.set_ylim(0, 600)
+a1.set_ylabel("p50 latency, µs")
+a1.set_title("GPU tensor, process → process", fontsize=9.5)
+a1.legend(frameon=False, fontsize=7.2, loc="upper left")
+for name, col in (("ROS 2 loaned", ROS), ("axon", AX)):
+    a2.plot(FAN_N, FAN[name][0], marker="o", color=col, lw=1.8)
+a2.annotate(f"{FAN['ROS 2 loaned'][0][-1]:.0f} µs", (8, FAN["ROS 2 loaned"][0][-1]), xytext=(6.1, 430), fontsize=7.5, color=ROS)
+a2.annotate(f"{FAN['axon'][0][-1]:.0f} µs", (8, FAN["axon"][0][-1]), xytext=(6.6, 75), fontsize=7.5, color=AX, fontweight="bold")
+a2.set_xticks(FAN_N)
+a2.set_xlabel("subscribers")
+a2.set_title("GPU 1 MiB fan-out, p50 µs (CPU at 8: 0.256 vs 0.021 cores)", fontsize=9)
+fig.text(0.5, 0.005, "Copy-out consumer, default CUDA contexts; fan-out with deep C-states held. Conditions and the cases axon does not win: docs/whitepapers/axon-performance-claims.pdf",
+         ha="center", fontsize=6.6, color="#555")
+fig.tight_layout(rect=(0, 0.04, 1, 1))
+save(fig, "readme_gpu_hero.svg")
+
 print("claims:", [(c, round(f, 2)) for c, f in claims])

@@ -16,6 +16,8 @@ CELLS = ["default_warm", "jetson_clocks_warm", "default_nowarm", "jetson_clocks_
 # 2026-11-21 addendum: the same runner on the OAK-D (UVC, NV12 1280x800, USB 3 bulk) and the webcam re-measured
 CAMS = ["oak", "webcam480"]
 CELLS2 = [f"{cam}_{c}" for cam in CAMS for c in CELLS]
+# 2026-11-21: the copy consumer with page-locked (pinned) and mapped host memory, warm-up cells
+CELLS3 = [f"{cam}_{c}_warm_{hm}" for cam in CAMS for c in ("default", "jetson_clocks") for hm in ("pinned", "mapped")]
 MODES = ["zerocopy", "copy"]
 STAGES = {"capture_to_publish": ("t_cap", "t_pub"), "publish_to_received": ("t_pub", "t_view"),
           "h2d": ("t_view", "t_gpu"), "kernel": ("t_gpu", "t_pre"), "inference": ("t_pre", "t_inf"),
@@ -35,7 +37,7 @@ def pct(v, p):
     return v[min(len(v) - 1, int(len(v) * p))]
 
 data, num = {}, {}
-for c in CELLS + CELLS2:
+for c in CELLS + CELLS2 + CELLS3:
     for m in MODES:
         rs = rows(c, m)
         data[(c, m)] = {k: [us(r, a, b) for r in rs] for k, (a, b) in STAGES.items()}

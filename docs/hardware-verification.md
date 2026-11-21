@@ -229,7 +229,11 @@ it lands in publish → received, outside the frame-processing stages below):
   The webcam streams on its widest isochronous setting (alt 11, 3 × 1020 B per microframe, 24.5 MB/s), which
   would carry the frame in 25.1 ms; the gap points at the camera's own pace rather than the link. A USB 3 camera (OAK-D Pro W in UVC
   mode, NV12 1280×800, bulk transfers) takes 3.3 ms for 1.5 MB; with it capture → inferred is 5.5 ms
-  zero-copy vs 6.2 ms copy at `jetson_clocks` (white paper §6, `results/oak_*`, `results/webcam480_*`). The exposure happens before the timestamp and is not in these numbers.
+  zero-copy vs 6.2 ms copy at `jetson_clocks` (white paper §6, `results/oak_*`, `results/webcam480_*`).
+- **Pinned and mapped host memory** (`E2E_HOSTMEM`, white paper §6.4): pinned shortens the H2D copy
+  1.3-2.3×; mapped (`cudaHostRegisterMapped` on the subscriber's mapping) removes it, and receive → inferred
+  then equals zero-copy within 0.04 ms. The remaining 0.11 ms (webcam) / 0.25-0.35 ms (OAK-D) of capture →
+  inferred is mostly the producer's `memcpy` (timestamp → published 0.11 / 0.24-0.28 ms longer). The exposure happens before the timestamp and is not in these numbers.
 - **The clock policy, not the transport, sets the inference time:** 10.8 ms at the default 30 W clocks
   (GPU at 115 MHz when idle, devfreq up to 905 MHz) against 1.7 ms with `jetson_clocks` (905 MHz
   fixed, memory clock locked too; `trtexec` alone: 1.6 ms).

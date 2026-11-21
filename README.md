@@ -243,7 +243,7 @@ Reproduce with [`examples/jetson_camera/`](examples/jetson_camera/README.md); ev
 **Camera → inference, end to end — for small hand-mounted cameras.** The same board and camera
 feed a ResNet-18 (TensorRT FP16) in another process, zero-copy against the usual copy path
 (driver buffer → `memcpy` → host-to-device copy), timed stage by stage over 1,200 frames per cell.
-White paper (9 pages, PDF): **[Small cameras, big costs](docs/whitepapers/axon-jetson-camera-inference-e2e.pdf)**.
+White paper (10 pages, PDF): **[Small cameras, big costs](docs/whitepapers/axon-jetson-camera-inference-e2e.pdf)**.
 
 | received → inferred, p50 (first-GPU-op cost excluded¹) | zero-copy | copy |
 |---|---|---|

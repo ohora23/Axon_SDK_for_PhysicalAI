@@ -55,7 +55,9 @@ Our first reading of the data attributed the wake-up cost to slow GPU reads of t
 a control experiment refuted it, and we report both. A second camera on USB 3 (OAK-D Pro W, 1280×800
 NV12, 1.5 MB per frame) shortens the camera interval to 3.3 ms and doubles the zero-copy saving
 (0.86 ms at default clocks); with locked clocks its capture → inferred is 5.5 ms against 34.4 ms
-for the webcam.
+for the webcam. A copy pipeline that registers its shared memory as mapped host memory removes the
+consumer's copy as well (§6.4); what the camera-buffer zero-copy path adds over it is the producer's
+<code>memcpy</code>, 0.1–0.3 ms per frame here.
 </div>
 
 <div class="key"><b>Key findings</b>
@@ -76,6 +78,10 @@ per frame), while the camera and wake-up costs do not shrink with zero-copy.</li
 timestamp to frame available, for a frame 2.5× larger. The zero-copy saving grows with the frame:
 0.86 / 0.43 ms of received → inferred (default / locked clocks), 1.13 / 0.69 ms of capture → inferred
 once the producer's <code>memcpy</code> is counted.</li>
+<li><b>Mapped host memory closes most of the gap</b> (§6.4): with the shared frame registered as mapped
+memory, the copy pipeline's receive → inferred equals zero-copy within 0.04 ms; pinned memory only
+shortens the H2D copy (1.3–2.3×). The remaining difference is mostly the producer's copy out of the
+driver buffer.</li>
 </ul></div>
 
 <h2>1. Why small cameras</h2>
@@ -312,12 +318,46 @@ so §5.2 carries over unchanged.</p>
 
 <h3>6.3 What this means</h3>
 <p>With a USB 3 camera and locked clocks, the whole chain from first packet to ResNet-18 result takes
-5.5 ms with zero-copy, 6.2 ms with the copy path. The transport choice is now 11 % of the total
-instead of 1 %, and the remaining time is mostly the camera interval (3.3 ms) and inference (1.7 ms).
+5.5 ms with zero-copy, 6.2 ms with the copy path. Against the pageable copy, the transport choice is now 11 % of the total
+instead of 1 % (§6.4 shows how much of it a mapped copy pipeline recovers), and the remaining time is mostly the camera interval (3.3 ms) and inference (1.7 ms).
 For hand cameras this argues for a camera that sends each frame at link speed where latency matters
 (USB 3 or CSI parts are where to look, but one OAK-D is the only such camera measured here, and
 many USB 3 cameras stream at sensor pace), and for zero-copy once the camera is fast enough that a
 millisecond is a large fraction of the budget.</p>
+
+<h3>6.4 Pinned and mapped host memory</h3>
+<p>The copy pipeline above copies from pageable memory, the slowest option. Two cheaper consumers need
+no camera-buffer pool, only a call on the shared memory the consumer already maps
+(<code>E2E_HOSTMEM</code>, PR #65): <i>pinned</i> page-locks each pool slot once
+(<code>cudaHostRegister</code>), so the H2D copy becomes a DMA; <i>mapped</i> registers it as mapped
+memory (<code>cudaHostRegisterMapped</code>) and the kernel reads the frame through a device pointer,
+with no copy at all. Each was run with its own zero-copy control in the same session; the controls
+agree with Table 3 within 0.06 ms.</p>
+<table>
+<thead><tr><th>p50, ms (warm-up)</th><th>zero-copy</th><th>copy,<br>pageable</th><th>copy,<br>pinned</th><th>copy,<br>mapped</th></tr></thead>
+<tbody>
+<tr><td colspan="5" style="text-align:left"><i>webcam, default clocks / jetson_clocks</i></td></tr>
+<tr><td>H2D copy</td><td>0 / 0</td><td>0.44 / 0.19</td><td>0.33 / 0.08</td><td>0 / 0</td></tr>
+<tr><td>received → inferred</td><td>11.11 / 1.74</td><td>11.57 / 1.94</td><td>11.45 / 1.83</td><td>11.12 / 1.74</td></tr>
+<tr class="total"><td>capture → inferred</td><td>44.45 / 34.35</td><td>45.05 / 34.66</td><td>44.90 / 34.53</td><td>44.56 / 34.46</td></tr>
+<tr><td colspan="5" style="text-align:left"><i>OAK-D, default clocks / jetson_clocks</i></td></tr>
+<tr><td>H2D copy</td><td>0 / 0</td><td>0.83 / 0.38</td><td>0.62 / 0.16</td><td>0 / 0</td></tr>
+<tr><td>received → inferred</td><td>11.14 / 1.74</td><td>12.05 / 2.19</td><td>11.78 / 1.92</td><td>11.18 / 1.75</td></tr>
+<tr class="total"><td>capture → inferred</td><td>15.67 / 5.53</td><td>16.85 / 6.24</td><td>16.59 / 5.96</td><td>16.02 / 5.78</td></tr>
+</tbody></table>
+<div class="cap">Table 4. Host-memory options for the copy pipeline. Zero-copy is the control run alongside the
+mapped cells; pageable is Table 3. Raw data <code>results/{webcam480,oak}_{default,jetson_clocks}_warm_{pinned,mapped}/</code>.</div>
+<p>Pinned memory shortens the H2D copy by 1.3× at default clocks and 2.3× with locked clocks, but the copy
+remains. Mapped memory removes it: the pre-processing kernel reads the host frame as fast as the zero-copy camera
+buffer (within 12 µs), and receive → inferred matches zero-copy within 0.04 ms for both cameras and both clock
+settings. What is left between mapped and zero-copy, 0.11 ms (webcam) and 0.25–0.35 ms (OAK-D) of
+capture → inferred, is mostly the producer's <code>memcpy</code> from the driver buffer into the shared
+pool (timestamp → published 0.11 and 0.24–0.28 ms longer), plus the CPU time and memory traffic it
+costs, which these timings do not show. At default clocks on the OAK-D, mapped memory also removes most
+of the copy pipeline's tail (p99 capture → inferred 16.30 ms mapped, 15.86 ms zero-copy, 17.98 ms
+pageable); at locked clocks and on the webcam the tails of all three are alike. One caveat: our kernel samples 224 × 224 pixels by nearest neighbour, which touches 224 of
+the 480 or 800 rows, roughly a third to a half of each frame's cache lines; a consumer that reads every
+byte through the mapping may pay more than this.</p>
 
 <h2>7. Implications for hand-mounted cameras</h2>
 <table class="impl">
@@ -326,7 +366,7 @@ millisecond is a large fraction of the budget.</p>
 <tr><td style="text-align:left">Timestamp → available ≈ 32 ms of a ~44 ms (default) or ~34 ms (locked) capture → inferred</td>
 <td style="text-align:left">Use a camera that sends the frame as fast as its link allows: the USB 3 OAK-D needs 3.3 ms for a 1.5 MB frame (§6). On USB 2.0 the link sets a floor of about 25 ms for 614 KB, and this webcam takes 32 ms. The transport software cannot recover this part.</td></tr>
 <tr><td style="text-align:left">Zero-copy saves 0.2–0.4 ms per frame per camera at 614 KB, 0.4–0.9 ms at 1.5 MB</td>
-<td style="text-align:left">Worth it per camera, and it adds up: four hand cameras sharing one GPU would save about 0.8–1.7 ms per cycle in H2D time alone (arithmetic, not measured), plus the CPU <code>memcpy</code> (~0.1 ms each) and the memory traffic.</td></tr>
+<td style="text-align:left">Without a camera-buffer pool, register the shared memory as mapped host memory: it removes the consumer's copy just as well (measured with a kernel that samples the frame; §6.4). A pool the camera writes into also removes the producer's copy (0.1–0.3 ms here) and its CPU and memory traffic. Either way it adds up: four hand cameras sharing one GPU would save about 0.8–1.7 ms per cycle in H2D time alone (arithmetic, not measured), plus the CPU <code>memcpy</code> (~0.1 ms each) and the memory traffic.</td></tr>
 <tr><td style="text-align:left">First GPU operation after idle: 0.3–1.1 ms per frame at 30 fps</td>
 <td style="text-align:left">Lock the clocks for low-rate perception (<code>jetson_clocks</code> measured; a steady background load is untested), or warm the GPU before the frame arrives (untested; the warm-up measured here ran after the frame was announced and only moved the cost), the GPU analogue of keeping a CPU out of deep idle (axon's <code>CpuLatencyHold</code>).</td></tr>
 <tr><td style="text-align:left">Timestamp taken with the first USB packet (up to 4 ms after it on this webcam)</td>
@@ -339,9 +379,9 @@ millisecond is a large fraction of the budget.</p>
 <ul>
 <li>Two cameras (USB 2.0 YUYV 640×480, USB 3 NV12 1280×800), one frame rate (30 fps), one board. The
 cameras differ in sensor and firmware as well as in the link, so §6 does not isolate the link.</li>
-<li>The copy baseline uses pageable host memory. Pinned memory, or mapped (zero-copy) host
-memory on the integrated GPU, would shorten or remove the H2D copy without axon's
-<code>NvBufSurface</code> pool; they were not measured.</li>
+<li>The pageable copy baseline of §4-§6.3 is the slowest option; §6.4 adds pinned and mapped host
+memory. Mapped memory was tested only with a kernel that samples the frame (roughly a third to a half of
+its cache lines).</li>
 <li>No ROS 2 baseline on the board (ROS 2 is not installed on it); the copy path stands in for a
 conventional pipeline.</li>
 <li>The exposure time and the true glass-to-inference latency are not measured; that needs an

@@ -13,6 +13,9 @@ import matplotlib.pyplot as plt
 HERE = os.path.dirname(os.path.abspath(__file__))
 RES = os.path.join(HERE, "..", "..", "..", "instrumentation", "jetson", "e2e", "results")
 CELLS = ["default_warm", "jetson_clocks_warm", "default_nowarm", "jetson_clocks_nowarm"]
+# 2026-11-21 addendum: the same runner on the OAK-D (UVC, NV12 1280x800, USB 3 bulk) and the webcam re-measured
+CAMS = ["oak", "webcam480"]
+CELLS2 = [f"{cam}_{c}" for cam in CAMS for c in CELLS]
 MODES = ["zerocopy", "copy"]
 STAGES = {"capture_to_publish": ("t_cap", "t_pub"), "publish_to_received": ("t_pub", "t_view"),
           "h2d": ("t_view", "t_gpu"), "kernel": ("t_gpu", "t_pre"), "inference": ("t_pre", "t_inf"),
@@ -32,7 +35,7 @@ def pct(v, p):
     return v[min(len(v) - 1, int(len(v) * p))]
 
 data, num = {}, {}
-for c in CELLS:
+for c in CELLS + CELLS2:
     for m in MODES:
         rs = rows(c, m)
         data[(c, m)] = {k: [us(r, a, b) for r in rs] for k, (a, b) in STAGES.items()}
@@ -40,6 +43,7 @@ for c in CELLS:
                            "seqlock_retries": sum(int(r["seqlock_retries"]) for r in rs),
                            **{k: {q: round(pct(v, p), 1) for q, p in (("p50", .5), ("p90", .9), ("p99", .99))} | {"max": round(max(v), 1)}
                               for k, v in data[(c, m)].items()}}
+        num[f"{c}/{m}"]["capture_to_publish"]["min"] = round(min(data[(c, m)]["capture_to_publish"]), 1)
 json.dump(num, open(os.path.join(HERE, "numbers.json"), "w"), indent=1)
 
 plt.rcParams.update({"font.size": 9, "font.family": "DejaVu Sans", "axes.spines.top": False, "axes.spines.right": False})
@@ -98,4 +102,26 @@ ax.set_ylabel("median, µs")
 fig.legend(*ax.get_legend_handles_labels(), frameon=False, fontsize=7.5, ncol=3, loc="upper center")
 fig.tight_layout(rect=(0, 0, 1, 0.9))
 fig.savefig(os.path.join(HERE, "figures", "fig4_wake.svg"), metadata={"Date": None})
+# Fig 5: capture -> inferred, median stages, webcam (USB 2.0) vs OAK-D (USB 3), warm-up cells
+fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.9), sharey=True)
+parts = [("capture_to_publish", "timestamp → published", "#9aa3ad"), ("publish_to_received", "publish → received", "#c9ced4"),
+         ("h2d", "H2D copy", "#c4651c"), ("kernel", "pre-processing", "#7f9db9"), ("inference", "inference", "#3b5b7a")]
+rows5 = [("webcam480", "zerocopy", "webcam, zero-copy"), ("webcam480", "copy", "webcam, copy"),
+         ("oak", "zerocopy", "OAK-D, zero-copy"), ("oak", "copy", "OAK-D, copy")]
+for ax, c, title in zip(axes, ["default_warm", "jetson_clocks_warm"], ["default clocks (30 W)", "jetson_clocks"]):
+    for i, (cam, m, _) in enumerate(rows5):
+        left = 0
+        for k, label, col in parts:
+            w = pct(data[(f"{cam}_{c}", m)][k], .5) / 1e3
+            ax.barh(i, w, left=left, color=col, label=label if i == 0 else None, height=0.6)
+            left += w
+        ax.text(left, i, f" {pct(data[(f'{cam}_{c}', m)]['capture_to_inferred'], .5) / 1e3:.2f}", va="center", fontsize=7.5)
+    ax.set_yticks(range(len(rows5)), [r[2] for r in rows5])
+    ax.set_title(title, fontsize=9)
+    ax.set_xlabel("median, ms (capture → inferred)")
+    ax.set_xlim(0, ax.get_xlim()[1] * 1.12)
+fig.legend(*axes[0].get_legend_handles_labels(), frameon=False, fontsize=7, ncol=5, loc="upper center")
+fig.tight_layout(rect=(0, 0, 1, 0.9))
+axes[0].invert_yaxis()   # shared y: invert once
+fig.savefig(os.path.join(HERE, "figures", "fig5_usb3.svg"), metadata={"Date": None})
 print(json.dumps({k: {s: v[s]["p50"] for s in ("h2d", "kernel", "inference", "received_to_inferred", "capture_to_inferred", "publish_to_received", "capture_to_publish")} for k, v in num.items()}, indent=0))

@@ -224,9 +224,12 @@ it lands in publish → received, outside the frame-processing stages below):
   record of `jetson_clocks` there). Receive → inferred in those runs: 12,010 against 12,427 µs, 2,077 against 2,271 µs.
   With the warm-up, publish → received grows by about the same amount (1,173 µs against 106 µs at
   the default clocks), because the warm-up (and its own kernel) runs there.
-- **The camera dominates the total.** uvcvideo stamps the frame when its first USB packet
-  arrives (`hwtimestamps=0`); about 32 ms then pass (USB 2.0 transfer plus driver dequeue; link
-  bandwidth or the camera's readout pace, not separated) before it can be published. The exposure happens before the timestamp and is not in these numbers.
+- **The camera dominates the total.** uvcvideo stamps the frame while processing its first USB
+  packet (`hwtimestamps=0`; up to one 4 ms isochronous URB after it); about 32 ms then pass (USB 2.0 transfer plus driver dequeue) before it can be published.
+  The webcam streams on its widest isochronous setting (alt 11, 3 × 1020 B per microframe, 24.5 MB/s), which
+  would carry the frame in 25.1 ms; the gap points at the camera's own pace rather than the link. A USB 3 camera (OAK-D Pro W in UVC
+  mode, NV12 1280×800, bulk transfers) takes 3.3 ms for 1.5 MB; with it capture → inferred is 5.5 ms
+  zero-copy vs 6.2 ms copy at `jetson_clocks` (white paper §6, `results/oak_*`, `results/webcam480_*`). The exposure happens before the timestamp and is not in these numbers.
 - **The clock policy, not the transport, sets the inference time:** 10.8 ms at the default 30 W clocks
   (GPU at 115 MHz when idle, devfreq up to 905 MHz) against 1.7 ms with `jetson_clocks` (905 MHz
   fixed, memory clock locked too; `trtexec` alone: 1.6 ms).

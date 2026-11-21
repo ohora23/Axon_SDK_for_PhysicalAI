@@ -36,7 +36,8 @@
 zero-copy against a copy path, measured stage by stage</div>
 <div class="meta">axon SDK (github.com/ohora23/Axon_SDK_for_PhysicalAI) · measured 2026-11-11 on hermes-head ·
 code <code>examples/jetson_e2e</code>, runner <code>instrumentation/jetson/e2e/run_e2e.sh</code>,
-raw data <code>instrumentation/jetson/e2e/results/</code> (PR #60) · paper PR #61</div>
+raw data <code>instrumentation/jetson/e2e/results/</code> (PR #60) · paper PR #61 ·
+revised 2026-11-21 with a USB 3 camera (§6, PRs #63-#64)</div>
 
 <div class="abstract">
 <b>Abstract.</b> Robot hands and grippers often carry small UVC cameras, such as USB 2.0, 640×480,
@@ -51,7 +52,10 @@ Two other costs are larger: the first GPU operation after the idle gap between 3
 (0.9–1.1 ms at default clocks; cause not isolated) and the interval from the frame's V4L2
 timestamp to its availability, which covers the USB 2.0 transfer (about 32 ms).
 Our first reading of the data attributed the wake-up cost to slow GPU reads of the camera buffer;
-a control experiment refuted it, and we report both.
+a control experiment refuted it, and we report both. A second camera on USB 3 (OAK-D Pro W, 1280×800
+NV12, 1.5 MB per frame) shortens the camera interval to 3.3 ms and doubles the zero-copy saving
+(0.86 ms at default clocks); with locked clocks its capture → inferred is 5.5 ms against 34.4 ms
+for the webcam.
 </div>
 
 <div class="key"><b>Key findings</b>
@@ -62,12 +66,16 @@ buffer and on <code>cudaMalloc</code> memory (234 vs 237 µs; 60 vs 62 µs).</li
 <li><b>The first GPU operation after idle costs more than the copy.</b> At 30 fps the GPU idles about
 30 ms per frame; the first GPU operation afterwards pays 0.9–1.1 ms (default clocks) or 0.3–0.36 ms
 (locked clocks). Clock ramp, power gating and the driver submit path were not separated.</li>
-<li><b>The camera dominates end to end.</b> 32–36 ms pass between the frame's V4L2 timestamp (first USB
+<li><b>The camera dominates end to end.</b> 32–36 ms pass between the frame's V4L2 timestamp (taken with its first USB
 packet) and the frame being available, for both pipelines (USB transfer plus driver dequeue).</li>
 <li><b>The clock policy sets inference time</b>: 10.8 ms at the default 30 W mode against 1.7 ms with
 <code>jetson_clocks</code> (GPU and memory clocks locked), for the same engine.</li>
 <li>For a hand with several cameras the copy cost scales with the camera count (0.2–0.4 ms each,
 per frame), while the camera and wake-up costs do not shrink with zero-copy.</li>
+<li><b>A USB 3 camera removes most of the camera interval</b> (§6): 3.3 ms instead of 32 ms from
+timestamp to frame available, for a frame 2.5× larger. The zero-copy saving grows with the frame:
+0.86 / 0.43 ms of received → inferred (default / locked clocks), 1.13 / 0.69 ms of capture → inferred
+once the producer's <code>memcpy</code> is counted.</li>
 </ul></div>
 
 <h2>1. Why small cameras</h2>
@@ -131,8 +139,8 @@ camera → pre-processing → inference loop.</p>
 
 <h2>3. Method</h2>
 <p><b>Timestamps.</b> Every frame carries six timestamps, all on <code>CLOCK_MONOTONIC_RAW</code>:
-the capture time (the V4L2 buffer timestamp, which uvcvideo takes on <code>CLOCK_MONOTONIC</code> when the
-frame's first USB packet arrives; converted with the offset between the two clocks read at
+the capture time (the V4L2 buffer timestamp, which uvcvideo takes on <code>CLOCK_MONOTONIC</code> when it
+processes the frame's first USB packet; converted with the offset between the two clocks read at
 dequeue), publish, received by the consumer, frame available on the GPU, pre-processing done
 and inference done. Each GPU step is followed by a stream synchronisation, so its time is
 measured from the host. The capture-time conversion and the derived publish time
@@ -221,11 +229,17 @@ treated as a separate stage or controlled for.</p>
 
 <h3>5.3 The camera dominates</h3>
 <p>Between the V4L2 timestamp and the frame being ready to publish, 32–36 ms pass in both
-pipelines (p50 32.1 ms, p99 36.2–36.3 ms). uvcvideo stamps a frame when its first USB packet
-arrives (<code>hwtimestamps=0</code>), so this interval is the USB 2.0 transfer of the frame plus the
+pipelines (p50 32.1 ms, p99 36.2–36.3 ms). uvcvideo stamps a frame when it processes its first USB
+packet (<code>hwtimestamps=0</code>; see below), so this interval is the USB 2.0 transfer of the frame plus the
 driver's copy out of the USB buffers and the dequeue; the sensor exposure happened earlier and is
 not included. The distribution has two modes, near 32 ms and near 36 ms, with a floor at 32.0 ms.
-The data cannot tell whether the link bandwidth or the camera's own readout pace sets it.
+The link alone would allow less: while streaming, the camera selects alt setting 11, the widest of its
+isochronous settings (3 × 1020 B per 125 µs microframe, 24.5 MB/s), which carries the 614 KB frame in
+25.1 ms. The timestamp itself is taken while uvcvideo processes the transfer (URB) holding the frame's
+first packet; an isochronous URB here spans up to 32 microframes (4 ms), so the stamp can trail that
+packet by up to 4 ms and the real transfer can be longer than 32 ms. Either way the gap to 25.1 ms,
+and a floor close to the 33.3 ms frame period, point at the camera streaming the frame at its own
+pace rather than at the link (§6 compares a USB 3 camera).
 Compared with this, received → inferred at locked clocks is 1.75–1.95 ms, or about
 2.1–2.3 ms when the first-operation cost is included.</p>
 
@@ -242,26 +256,89 @@ axon's <code>wait_for_update</code> on this build: the JetPack 5 kernel headers 
 <code>futex_waitv</code>, so the wait falls back to polling. On kernels ≥ 5.16 with matching headers
 the wait is futex-based.</p>
 
-<h2>6. Implications for hand-mounted cameras</h2>
+<h2 class="pb">6. A USB 3 camera (addendum, 2026-11-21)</h2>
+<p>To see how the picture changes with a faster camera link, the same runner, the same engine and
+the same board measured a Luxonis <b>OAK-D Pro W</b> (colour sensor OV9782, global shutter). Its firmware
+can present the colour stream as a standard UVC camera (depthai 2.30 UVC node); it then streams
+<b>NV12 1280×800 at 30 fps</b> (1.5 MB per frame, 2.5× the webcam's) over <b>USB 3 bulk transfers</b>
+(5 Gbps link, 1024-byte packets in bursts of up to 16). The example gained an NV12 path for this (PR #63):
+the frame lands in a GRAY8 <code>NvBufSurface</code> of 1280 × 1200 rows, Y plane followed by the
+interleaved UV plane, and a separate kernel converts it (checked against a CPU reference). The webcam
+was re-measured in the same session, 1,200 frames per cell as before.</p>
+<table>
+<thead><tr><th>p50, ms (warm-up)</th><th>webcam<br>zero-copy</th><th>webcam<br>copy</th><th>OAK-D<br>zero-copy</th><th>OAK-D<br>copy</th></tr></thead>
+<tbody>
+<tr><td colspan="5" style="text-align:left"><i>default clocks (30 W)</i></td></tr>
+<tr><td>timestamp → published</td><td>32.11</td><td>32.23</td><td>3.31</td><td>3.58</td></tr>
+<tr><td>H2D copy</td><td>0</td><td>0.44</td><td>0</td><td>0.83</td></tr>
+<tr><td>received → inferred</td><td>11.14</td><td>11.57</td><td>11.20</td><td>12.05</td></tr>
+<tr class="total"><td>capture → inferred</td><td>44.47</td><td>45.05</td><td>15.72</td><td>16.85</td></tr>
+<tr><td colspan="5" style="text-align:left"><i>jetson_clocks</i></td></tr>
+<tr><td>timestamp → published</td><td>32.10</td><td>32.20</td><td>3.30</td><td>3.56</td></tr>
+<tr><td>H2D copy</td><td>0</td><td>0.19</td><td>0</td><td>0.38</td></tr>
+<tr><td>received → inferred</td><td>1.75</td><td>1.94</td><td>1.76</td><td>2.19</td></tr>
+<tr class="total"><td>capture → inferred</td><td>34.36</td><td>34.66</td><td>5.55</td><td>6.24</td></tr>
+</tbody></table>
+<div class="cap">Table 3. Webcam (USB 2.0, YUYV 640×480) and OAK-D (USB 3, NV12 1280×800), same session, GPU
+woken before each frame. Raw data <code>results/{webcam480,oak}_{default,jetson_clocks}_{warm,nowarm}/</code>.
+The re-measured webcam matches Table 1 within 0.1 ms per stage and 0.15 ms for capture → inferred.</div>
+
+<figure><img src="figures/fig5_usb3.svg" alt="Capture to inferred, webcam vs OAK-D">
+<div class="cap">Figure 5. Median capture → inferred by stage (bar = sum of the stage medians; the number is the
+median of capture → inferred itself, as in Table 3; "timestamp → published" is the camera interval, "publish → received"
+includes the warm-up kernel). On USB 3 the camera interval shrinks from 32 ms
+to 3.3 ms, and the H2D copy, a sliver for the webcam, becomes visible next to the locked-clock
+inference.</div></figure>
+
+<h3>6.1 The camera interval</h3>
+<p>From the V4L2 timestamp to the frame being published takes 3.31 ms (p50; floor 3.18 ms, p99 3.40 ms)
+for the OAK-D's 1.5 MB, against 32.1 ms for the webcam's 614 KB. 1.5 MB in 3.3 ms is about 465 MB/s,
+near what a 5 Gbps link carries in practice, so the OAK-D sends the frame about as fast as its link
+allows. The webcam's floor of 32.0 ms is about 7 ms above what its isochronous allocation needs
+(25.1 ms; §5.3 on the timestamp) and close to its frame period, so it is not the USB 2.0 bandwidth
+alone; a camera that sends the frame at link speed removes most of this interval. The two cameras differ in more than
+the link (sensor, firmware, format), so this is a comparison of two real cameras, not an isolated
+measurement of the link.</p>
+
+<h3>6.2 The zero-copy saving grows with the frame</h3>
+<p>The H2D copy of the 1.5 MB NV12 frame takes 0.83 ms at default clocks and 0.38 ms with locked clocks
+(1.85 and 4.1 GB/s from pageable memory), about twice the webcam's. Zero-copy removes it, and the copy
+pipeline's producer also spends 0.26–0.27 ms more on its <code>memcpy</code> (timestamp → published 3.58 vs
+3.31 ms at default clocks, 3.56 vs 3.30 ms locked). Over capture → inferred zero-copy saves 1.13 ms (6.7 %) at default clocks and 0.69 ms
+(11 %) with locked clocks, against 0.58 and 0.30 ms for the webcam. The tail widens more for the copy
+pipeline: p99 capture → inferred 17.98 vs 15.91 ms at default clocks. The first GPU operation after the
+idle gap costs the same as with the webcam (no warm-up: 1.22 vs 0.28 ms kernel time at default clocks),
+so §5.2 carries over unchanged.</p>
+
+<h3>6.3 What this means</h3>
+<p>With a USB 3 camera and locked clocks, the whole chain from first packet to ResNet-18 result takes
+5.5 ms with zero-copy, 6.2 ms with the copy path. The transport choice is now 11 % of the total
+instead of 1 %, and the remaining time is mostly the camera interval (3.3 ms) and inference (1.7 ms).
+For hand cameras this argues for a camera that sends each frame at link speed where latency matters
+(USB 3 or CSI parts are where to look, but one OAK-D is the only such camera measured here, and
+many USB 3 cameras stream at sensor pace), and for zero-copy once the camera is fast enough that a
+millisecond is a large fraction of the budget.</p>
+
+<h2>7. Implications for hand-mounted cameras</h2>
 <table class="impl">
 <thead><tr><th>Observation</th><th>Design implication</th></tr></thead>
 <tbody>
 <tr><td style="text-align:left">Timestamp → available ≈ 32 ms of a ~44 ms (default) or ~34 ms (locked) capture → inferred</td>
-<td style="text-align:left">Latency targets below ~35 ms likely need a different camera: USB 3 or CSI, a higher frame rate, or, if the link bandwidth is the limit (not established here), lower resolution or MJPEG (decode on Jetson's NVJPG). The transport software cannot recover this part.</td></tr>
-<tr><td style="text-align:left">Zero-copy saves 0.2–0.4 ms per frame per camera</td>
+<td style="text-align:left">Use a camera that sends the frame as fast as its link allows: the USB 3 OAK-D needs 3.3 ms for a 1.5 MB frame (§6). On USB 2.0 the link sets a floor of about 25 ms for 614 KB, and this webcam takes 32 ms. The transport software cannot recover this part.</td></tr>
+<tr><td style="text-align:left">Zero-copy saves 0.2–0.4 ms per frame per camera at 614 KB, 0.4–0.9 ms at 1.5 MB</td>
 <td style="text-align:left">Worth it per camera, and it adds up: four hand cameras sharing one GPU would save about 0.8–1.7 ms per cycle in H2D time alone (arithmetic, not measured), plus the CPU <code>memcpy</code> (~0.1 ms each) and the memory traffic.</td></tr>
 <tr><td style="text-align:left">First GPU operation after idle: 0.3–1.1 ms per frame at 30 fps</td>
 <td style="text-align:left">Lock the clocks for low-rate perception (<code>jetson_clocks</code> measured; a steady background load is untested), or warm the GPU before the frame arrives (untested; the warm-up measured here ran after the frame was announced and only moved the cost), the GPU analogue of keeping a CPU out of deep idle (axon's <code>CpuLatencyHold</code>).</td></tr>
-<tr><td style="text-align:left">Timestamp = first USB packet</td>
+<tr><td style="text-align:left">Timestamp taken with the first USB packet (up to 4 ms after it on this webcam)</td>
 <td style="text-align:left">When fusing with proprioception (joint encoders, tactile), shift the camera time back by the exposure and readout the timestamp does not include.</td></tr>
 <tr><td style="text-align:left">Consumer on an isolated CPU; no frame skipped in 9,600 frames</td>
 <td style="text-align:left">Pin the perception consumer away from I/O and other inference; see the RT section of <code>docs/hardware-verification.md</code> §7.</td></tr>
 </tbody></table>
 
-<h2>7. Limitations</h2>
+<h2>8. Limitations</h2>
 <ul>
-<li>One camera, one resolution (640×480 YUYV), one frame rate (30 fps), one board. Larger frames
-make the H2D copy, and so the zero-copy saving, proportionally larger; a RealSense run is planned.</li>
+<li>Two cameras (USB 2.0 YUYV 640×480, USB 3 NV12 1280×800), one frame rate (30 fps), one board. The
+cameras differ in sensor and firmware as well as in the link, so §6 does not isolate the link.</li>
 <li>The copy baseline uses pageable host memory. Pinned memory, or mapped (zero-copy) host
 memory on the integrated GPU, would shorten or remove the H2D copy without axon's
 <code>NvBufSurface</code> pool; they were not measured.</li>
@@ -275,15 +352,19 @@ shifts colours, not timing.</li>
 variation beyond two runs is not characterised.</li>
 </ul>
 
-<h2>8. Reproduce</h2>
+<h2>9. Reproduce</h2>
 <pre>cmake -S . -B build -DAXON_ENABLE_JETSON=ON -DAXON_WITH_CUDA=ON &amp;&amp; cmake --build build -j
 /usr/src/tensorrt/bin/trtexec --onnx=resnet18-v1-7.onnx --fp16 --saveEngine=resnet18_fp16.engine
 E2E_WARM_GPU=1 instrumentation/jetson/e2e/run_e2e.sh build resnet18_fp16.engine 600 2 my_run
 sudo jetson_clocks --store clocks.conf &amp;&amp; sudo jetson_clocks          # locked-clock cells
 E2E_WARM_GPU=1 instrumentation/jetson/e2e/run_e2e.sh build resnet18_fp16.engine 600 2 my_run_jc
 sudo jetson_clocks --restore clocks.conf
+# USB 3 camera: OAK-D as a UVC device with instrumentation/jetson/e2e/oak_uvc.py running, then
+E2E_FORMAT=NV12 E2E_WIDTH=1280 E2E_HEIGHT=800 E2E_DEVICE=/dev/video2 E2E_WARM_GPU=1 \
+  instrumentation/jetson/e2e/run_e2e.sh build resnet18_fp16.engine 600 2 oak_run
 python3 docs/whitepapers/jetson-camera-e2e/make_figures.py       # figures + numbers.json</pre>
-<p class="note">Raw data: <code>instrumentation/jetson/e2e/results/{default,jetson_clocks}_{warm,nowarm}/</code>,
+<p class="note">Raw data: <code>instrumentation/jetson/e2e/results/{default,jetson_clocks}_{warm,nowarm}/</code>
+(and, for §6, the same cells prefixed <code>oak_</code> and <code>webcam480_</code>),
 one CSV row per frame (<code>seq,t_cap,t_pub,t_view,t_gpu,t_pre,t_inf,top1,seqlock_retries</code>),
 consumer summaries, producer logs and <code>env.txt</code> (kernel, power mode, isolated CPUs, camera
 format, GPU clocks, warm-up setting; the <code>*_nowarm</code> runs predate the clock record). Every

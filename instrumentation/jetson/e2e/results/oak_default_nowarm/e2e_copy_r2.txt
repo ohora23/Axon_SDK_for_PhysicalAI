@@ -1,0 +1,8 @@
+consumer(copy): engine /home/hermes/axon-dev/models/resnet18_fp16.engine [1,3,224,224] -> 1000
+consumer(copy): 600 frames -> /home/hermes/axon-dev/src/instrumentation/jetson/e2e/results/oak_default_nowarm/e2e_copy_r2.csv, 0 frames skipped (consumer behind)
+  cap_to_pub   p50   3574.8  p90   3625.0  p99   3719.1  max   4570.2 us
+  pub_to_view  p50    107.6  p90    197.3  p99    227.5  max    247.3 us
+  view_to_gpu  p50   1782.9  p90   1856.1  p99   1905.2  max   1966.0 us
+  gpu_to_pre   p50    289.7  p90    307.1  p99    340.9  max    381.4 us
+  pre_to_inf   p50  10923.6  p90  10957.7  p99  10992.6  max  11007.3 us
+  cap_to_inf   p50  16701.9  p90  16810.4  p99  16944.2  max  17699.7 us

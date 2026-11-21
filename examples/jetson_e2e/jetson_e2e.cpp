@@ -9,6 +9,10 @@
 //            the GPU, then TensorRT; one CSV row per frame and a per-stage summary. E2E_WARM_GPU=1
 //            runs a small kernel before each frame is taken (it lands in publish → received), so
 //            the first timed GPU step does not also pay for waking the GPU between frames.
+//            E2E_HOSTMEM (copy consumer only): pageable (default) copies the shared host frame with a
+//            plain cudaMemcpyAsync; pinned page-locks each pool slot once (cudaHostRegister) so the H2D
+//            copy is a DMA; mapped registers it as mapped memory and the kernel reads the host frame
+//            directly (no H2D copy at all).
 //
 // All timestamps are CLOCK_MONOTONIC_RAW (axon::rt_now_ns). The capture time is the V4L2 buffer
 // timestamp (CLOCK_MONOTONIC) moved to MONOTONIC_RAW with the offset read at DQBUF.
@@ -329,6 +333,24 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
         return 1;
     }
     const bool warm_gpu = getenv("E2E_WARM_GPU") && atoi(getenv("E2E_WARM_GPU"));
+    enum class HostMem { Pageable, Pinned, Mapped } hostmem = HostMem::Pageable;
+    if (const char* hm = getenv("E2E_HOSTMEM"); hm && *hm) {
+        if (!strcmp(hm, "pinned")) hostmem = HostMem::Pinned;
+        else if (!strcmp(hm, "mapped")) hostmem = HostMem::Mapped;
+        else if (strcmp(hm, "pageable") != 0) { fprintf(stderr, "E2E_HOSTMEM must be pageable, pinned or mapped\n"); return 2; }
+    }
+    const char* hostmem_name = hostmem == HostMem::Pinned ? "pinned" : hostmem == HostMem::Mapped ? "mapped" : "pageable";
+    // Pool slots are registered once, the first time each one is seen (within the 30 warm-up frames).
+    std::vector<std::pair<const void*, const std::uint8_t*>> registered;   // host slot -> device pointer
+    auto device_view = [&](const void* host) -> const std::uint8_t* {
+        for (const auto& r : registered) if (r.first == host) return r.second;
+        const unsigned flags = cudaHostRegisterReadOnly | (hostmem == HostMem::Mapped ? cudaHostRegisterMapped : 0u);
+        if (cudaHostRegister(const_cast<void*>(host), cfg.frame_bytes, flags) != cudaSuccess) return nullptr;
+        void* dev = nullptr;
+        if (hostmem == HostMem::Mapped && cudaHostGetDevicePointer(&dev, const_cast<void*>(host), 0) != cudaSuccess) return nullptr;
+        registered.emplace_back(host, static_cast<const std::uint8_t*>(dev ? dev : const_cast<void*>(host)));
+        return registered.back().second;
+    };
     std::vector<float> scores(static_cast<std::size_t>(n_out));
     printf("consumer(%s): engine %s [1,3,%d,%d] -> %lld\n", zerocopy ? "zerocopy" : "copy", engine_path, net_h,
             net_w, static_cast<long long>(n_out));
@@ -385,9 +407,18 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
                         v->row_pitch, cfg.row_bytes);
                 return 1;
             }
-            CK(cudaMemcpyAsync(d_stage, v->data, cfg.frame_bytes, cudaMemcpyHostToDevice, stream));
-            CK(cudaStreamSynchronize(stream));
-            src = static_cast<const std::uint8_t*>(d_stage);
+            const std::uint8_t* reg = nullptr;
+            if (hostmem != HostMem::Pageable && !(reg = device_view(v->data))) {
+                fprintf(stderr, "cudaHostRegister (%s) of the shared frame failed\n", hostmem_name);
+                return 1;
+            }
+            if (hostmem == HostMem::Mapped) {
+                src = reg;   // the kernel reads the host frame through the mapping
+            } else {
+                CK(cudaMemcpyAsync(d_stage, v->data, cfg.frame_bytes, cudaMemcpyHostToDevice, stream));
+                CK(cudaStreamSynchronize(stream));
+                src = static_cast<const std::uint8_t*>(d_stage);
+            }
         }
         const std::uint64_t t_gpu = rt_now_ns();
         if (cfg.fourcc == V4L2_PIX_FMT_NV12) {
@@ -420,8 +451,10 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
         ++recorded;
     }
     fclose(csv);
-    printf("consumer(%s%s): %ld frames -> %s, %ld frames skipped (consumer behind)\n", zerocopy ? "zerocopy" : "copy",
-            warm_gpu ? ", GPU pre-warmed" : "", recorded, out_csv, skipped);
+    printf("consumer(%s%s%s%s): %ld frames -> %s, %ld frames skipped (consumer behind)\n", zerocopy ? "zerocopy" : "copy",
+           zerocopy ? "" : ", host memory ", zerocopy ? "" : hostmem_name, warm_gpu ? ", GPU pre-warmed" : "", recorded,
+           out_csv, skipped);
+    for (const auto& r : registered) cudaHostUnregister(const_cast<void*>(r.first));
     summary("cap_to_pub", cap_pub);
     summary("pub_to_view", pub_view);
     summary("view_to_gpu", view_gpu);
@@ -451,7 +484,8 @@ int main(int argc, char** argv) {
     fprintf(stderr,
             "usage: %s producer zerocopy|copy /dev/videoN [frames]\n"
             "       %s consumer zerocopy|copy <engine.plan> <frames> <out.csv>\n"
-            "environment: E2E_FORMAT=YUYV|NV12  E2E_WIDTH=W  E2E_HEIGHT=H  (defaults: YUYV 640 480)\n",
+            "environment: E2E_FORMAT=YUYV|NV12  E2E_WIDTH=W  E2E_HEIGHT=H  (defaults: YUYV 640 480)\n"
+            "             E2E_WARM_GPU=1  E2E_HOSTMEM=pageable|pinned|mapped (copy consumer)\n",
             argv[0], argv[0]);
     return 2;
 }

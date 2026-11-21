@@ -20,7 +20,7 @@ E2E_DEVICE=${E2E_DEVICE:-/dev/video0}
 
 { uname -a; nvpmodel -q 2>/dev/null | head -1; echo "isolated=$(cat /sys/devices/system/cpu/isolated)"
   v4l2-ctl -d "$E2E_DEVICE" --get-fmt-video 2>/dev/null; echo "engine=$ENGINE frames=$FRAMES reps=$REPS E2E_WARM_GPU=${E2E_WARM_GPU:-0}"
-  echo "E2E_FORMAT=${E2E_FORMAT:-YUYV} E2E_WIDTH=${E2E_WIDTH:-640} E2E_HEIGHT=${E2E_HEIGHT:-480} device=$E2E_DEVICE"
+  echo "E2E_FORMAT=${E2E_FORMAT:-YUYV} E2E_WIDTH=${E2E_WIDTH:-640} E2E_HEIGHT=${E2E_HEIGHT:-480} device=$E2E_DEVICE E2E_HOSTMEM=${E2E_HOSTMEM:-pageable}"
   gpu=$(ls -d /sys/class/devfreq/*.gv11b /sys/class/devfreq/*.ga10b 2>/dev/null | head -1)   # Xavier, Orin
   [ -n "$gpu" ] && echo "gpu_freq cur=$(cat $gpu/cur_freq) min=$(cat $gpu/min_freq) max=$(cat $gpu/max_freq)" || echo "gpu_freq unknown"
   echo "cpu4 min=$(cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_min_freq) max=$(cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_max_freq)"

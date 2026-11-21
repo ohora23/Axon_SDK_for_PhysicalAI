@@ -232,8 +232,8 @@ it lands in publish → received, outside the frame-processing stages below):
   zero-copy vs 6.2 ms copy at `jetson_clocks` (white paper §6, `results/oak_*`, `results/webcam480_*`).
 - **Pinned and mapped host memory** (`E2E_HOSTMEM`, white paper §6.4): pinned shortens the H2D copy
   1.3-2.3×; mapped (`cudaHostRegisterMapped` on the subscriber's mapping) removes it, and receive → inferred
-  then equals zero-copy within 0.04 ms. The remaining gap is the producer's `memcpy` (0.11 ms webcam,
-  0.25-0.28 ms OAK-D). The exposure happens before the timestamp and is not in these numbers.
+  then equals zero-copy within 0.04 ms. The remaining 0.11 ms (webcam) / 0.25-0.35 ms (OAK-D) of capture →
+  inferred is mostly the producer's `memcpy` (timestamp → published 0.11 / 0.24-0.28 ms longer). The exposure happens before the timestamp and is not in these numbers.
 - **The clock policy, not the transport, sets the inference time:** 10.8 ms at the default 30 W clocks
   (GPU at 115 MHz when idle, devfreq up to 905 MHz) against 1.7 ms with `jetson_clocks` (905 MHz
   fixed, memory clock locked too; `trtexec` alone: 1.6 ms).

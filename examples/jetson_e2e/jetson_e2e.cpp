@@ -413,7 +413,9 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
                 return 1;
             }
             if (hostmem == HostMem::Mapped) {
-                src = reg;   // the kernel reads the host frame through the mapping
+                // The kernel reads the producer's slot through the mapping: like the pageable memcpy it is not
+                // covered by the seqlock, but the window is now the kernel time (fine unless 5+ frames behind).
+                src = reg;
             } else {
                 CK(cudaMemcpyAsync(d_stage, v->data, cfg.frame_bytes, cudaMemcpyHostToDevice, stream));
                 CK(cudaStreamSynchronize(stream));

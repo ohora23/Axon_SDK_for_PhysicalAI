@@ -67,31 +67,31 @@ static std::int32_t parse_env(FrameConfig& cfg) {
     unsigned ew = 640;
     if (wv && strlen(wv) > 0) {
         char* e;
-        unsigned v = strtoul(wv, &e, 10);
-        if (*e != '\0' || v == 0) {
-            fprintf(stderr, "E2E_WIDTH must be a positive integer\n");
+        const unsigned long v = strtoul(wv, &e, 10);   // full width first: no wrap before the range check
+        if (*e != '\0' || v == 0 || v > 8192 || wv[0] == '-') {
+            fprintf(stderr, "E2E_WIDTH must be an integer in 1..8192\n");
             return 2;
         }
-        ew = v;
+        ew = static_cast<unsigned>(v);
     }
 
     const char* hv = getenv("E2E_HEIGHT");
     unsigned eh = 480;
     if (hv && strlen(hv) > 0) {
         char* e;
-        unsigned v = strtoul(hv, &e, 10);
-        if (*e != '\0' || v == 0) {
-            fprintf(stderr, "E2E_HEIGHT must be a positive integer\n");
+        const unsigned long v = strtoul(hv, &e, 10);
+        if (*e != '\0' || v == 0 || v > 8192 || hv[0] == '-') {
+            fprintf(stderr, "E2E_HEIGHT must be an integer in 1..8192\n");
             return 2;
         }
-        eh = v;
+        eh = static_cast<unsigned>(v);
     }
 
     cfg.w = ew;
     cfg.h = eh;
     cfg.fourcc = is_nv12 ? V4L2_PIX_FMT_NV12 : V4L2_PIX_FMT_YUYV;
     cfg.row_bytes = is_nv12 ? ew : 2 * ew;
-    cfg.rows = is_nv12 ? eh * 3 / 2 : eh;
+    cfg.rows = is_nv12 ? eh + (eh + 1) / 2 : eh;   // NV12: Y rows + ceil(H/2) UV rows
     cfg.frame_bytes = cfg.rows * cfg.row_bytes;
     cfg.pool_height = cfg.rows;
     cfg.pool_fourcc = is_nv12 ? V4L2_PIX_FMT_GREY : cfg.fourcc;
@@ -252,6 +252,7 @@ int producer_copy(const char* dev, long frames, const FrameConfig& cfg) {
         b.memory = V4L2_MEMORY_MMAP;
         if (xioctl(v, VIDIOC_DQBUF, &b) < 0) { perror("DQBUF"); break; }
         if (b.flags & V4L2_BUF_FLAG_ERROR) fprintf(stderr, "producer: frame %ld flagged corrupt by the driver\n", n);
+        if (b.bytesused < cfg.frame_bytes) fprintf(stderr, "producer: frame %ld short (%u of %u bytes)\n", n, b.bytesused, cfg.frame_bytes);
         AcquiredDescriptor a = pub->acquire_descriptor();   // the pool picks the slot
         std::memcpy(a.host_view, maps[b.index], cfg.frame_bytes);
         fill(a, cfg.row_bytes, b, cfg);
@@ -379,7 +380,12 @@ int consumer(bool zerocopy, const char* engine_path, long frames, const char* ou
             src = static_cast<const std::uint8_t*>(v->device_ptr);
             if (!src) { fprintf(stderr, "no CUDA view of the frame\n"); return 1; }
         } else {
-            CK(cudaMemcpyAsync(d_stage, v->data, static_cast<size_t>(v->shape.dims[0]) * v->row_pitch, cudaMemcpyHostToDevice, stream));
+            if (v->row_pitch != cfg.row_bytes) {   // d_stage holds a packed frame; a padded (zerocopy) producer would overflow it
+                fprintf(stderr, "copy consumer needs a packed frame (row_pitch %u, expected %u): is the producer in zerocopy mode?\n",
+                        v->row_pitch, cfg.row_bytes);
+                return 1;
+            }
+            CK(cudaMemcpyAsync(d_stage, v->data, cfg.frame_bytes, cudaMemcpyHostToDevice, stream));
             CK(cudaStreamSynchronize(stream));
             src = static_cast<const std::uint8_t*>(d_stage);
         }

@@ -55,6 +55,7 @@ int main(int argc, char** argv) {
     std::vector<NvBufSurface*> s(kBuf);
     for (auto& x : s)
         if (NvBufSurfaceAllocate(&x, 1, &p) != 0) { fprintf(stderr, "NvBufSurfaceAllocate failed\n"); return 1; }
+        else x->numFilled = 1;   // Allocate leaves it 0, and Map/Sync then reject index 0
     const std::uint32_t pitch = s[0]->surfaceList[0].pitch;
     const std::uint32_t bsize = s[0]->surfaceList[0].dataSize;
     printf("surface: %ux%u GRAY8 pitch=%u dataSize=%u\n", p.params.width, rows, pitch, bsize);
@@ -116,13 +117,16 @@ int main(int argc, char** argv) {
         prev_ts = ts;
         if (got == frames - 1) {   // Y plane must not be constant (proves the camera wrote it)
             NvBufSurface* x = s[b.index];
-            NvBufSurfaceMap(x, 0, 0, NVBUF_MAP_READ);
-            NvBufSurfaceSyncForCpu(x, 0, 0);
+            if (NvBufSurfaceMap(x, 0, 0, NVBUF_MAP_READ) != 0 || NvBufSurfaceSyncForCpu(x, 0, 0) != 0) {
+                printf("NvBufSurfaceMap/SyncForCpu failed, skipping the content check\n");
+                ++got;
+                break;
+            }
             const auto* y = static_cast<const std::uint8_t*>(x->surfaceList[0].mappedAddr.addr[0]);
             std::uint32_t lo = 255, hi = 0;
             for (std::uint32_t r = 0; r < H; r += 8)
                 for (std::uint32_t c = 0; c < W; c += 8) { lo = std::min<std::uint32_t>(lo, y[r * pitch + c]); hi = std::max<std::uint32_t>(hi, y[r * pitch + c]); }
-            printf("last frame Y range %u..%u\n", lo, hi);
+            printf("last frame byte range %u..%u (first plane)\n", lo, hi);
             NvBufSurfaceUnMap(x, 0, 0);
         }
         ++got;

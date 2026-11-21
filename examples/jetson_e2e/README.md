@@ -35,8 +35,10 @@ E2E_FORMAT=NV12 E2E_WIDTH=1280 E2E_HEIGHT=800 E2E_DEVICE=/dev/video2 E2E_WARM_GP
   instrumentation/jetson/e2e/run_e2e.sh build resnet18_fp16.engine 600 2 oak_nv12
 ```
 
-The zero-copy path needs the camera to accept the surface pitch as `bytesperline`; at small widths the
-surface pitch is padded (160 px YUYV → 512 B) and a camera may refuse it (`camera can't do ... at pitch`).
+The zero-copy path needs the camera to accept the surface pitch as `bytesperline`. NvBufSurface pads the
+pitch when the row is not a multiple of its alignment (observed on Xavier: a 320 B row of 160 px YUYV gets
+a 512 B pitch; 1280 B rows are not padded), and uvcvideo cameras usually refuse a padded `bytesperline`
+(`camera can't do ... at pitch`). Pick a width whose row bytes are a multiple of 256, or use copy mode.
 The kernels are checked against a CPU reference by `test_preprocess.cu` (build line at its top).
 
 `run_e2e.sh` alternates the two modes, consumer on CPU 4, producer on CPUs 0-3; results land in

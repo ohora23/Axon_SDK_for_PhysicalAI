@@ -99,7 +99,7 @@ int main() {
         // NV12: UV plane placed after the Y plane plus a gap, to catch a hard-coded h*pitch offset.
         {
             const uint32_t uv_offset = c.pitch * c.h + 4096;
-            std::vector<uint8_t> img(uv_offset + c.pitch * (c.h / 2));
+            std::vector<uint8_t> img(uv_offset + c.pitch * ((c.h + 1) / 2));
             for (auto& b : img) b = static_cast<uint8_t>(byte(rng));
             uint8_t* d_img;
             cudaMalloc(&d_img, img.size());

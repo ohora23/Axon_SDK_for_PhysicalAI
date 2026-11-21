@@ -221,7 +221,7 @@ ROS2(rclpy)는 같은 데이터를 옮기는 데 **캐시미스 8.6배**, **명�
 
 재현: [`examples/jetson_camera/`](examples/jetson_camera/README.md), 단계별 근거: [docs/hardware-verification.md §6](docs/hardware-verification.md#6-jetson--camera--cuda-zero-copy-via-nvbufsurface-agx-xavier-).
 
-**카메라 → 추론 end-to-end — 손에 다는 소형 카메라를 위한 참고 자료.** 같은 보드와 카메라로 다른 프로세스의 ResNet-18(TensorRT FP16)에 프레임을 넘기고, 복사 0회 경로와 일반적인 복사 경로(드라이버 버퍼 → `memcpy` → H2D 복사)를 단계별로 쟀다(셀당 1,200프레임). 백서(영문 9쪽, PDF): **[Small cameras, big costs](docs/whitepapers/axon-jetson-camera-inference-e2e.pdf)**.
+**카메라 → 추론 end-to-end — 손에 다는 소형 카메라를 위한 참고 자료.** 같은 보드와 카메라로 다른 프로세스의 ResNet-18(TensorRT FP16)에 프레임을 넘기고, 복사 0회 경로와 일반적인 복사 경로(드라이버 버퍼 → `memcpy` → H2D 복사)를 단계별로 쟀다(셀당 1,200프레임). 백서(영문 10쪽, PDF): **[Small cameras, big costs](docs/whitepapers/axon-jetson-camera-inference-e2e.pdf)**.
 
 | 수신 → 추론 끝, p50 (유휴 후 첫 GPU 작업 비용 제외¹) | 복사 0회 | 복사 |
 |---|---|---|

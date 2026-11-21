@@ -208,7 +208,7 @@ The rclpy sweep below (0.30 vs 0.98 cores) is almost all Python:
 | 1 MiB | 36 / **15** | 171 / **25** |
 | 4 MiB | 80 / **59** | 485 / **26** |
 
-On the host, ROS 2's zero-copy path is close: both copy the payload once into shared memory, and axon saves a fixed ~20 µs per message. On the GPU, a ROS 2 message lives in host memory, so the payload goes D2H and H2D around the transport; axon hands over the device buffer itself and stays at 24-26 µs at any size. Default Fast DDS does **not** take the zero-copy path for these sizes: it needs the XML profile in that directory.
+On the host, ROS 2's zero-copy path is close: both copy the payload once into shared memory, and axon saves a fixed 4-19 µs per message. On the GPU, a ROS 2 message lives in host memory, so the payload goes D2H and H2D around the transport; axon hands over the device buffer itself and stays at 24-26 µs from 147 KiB to 4 MiB (36 / 184 µs at 16 / 64 MiB). Default Fast DDS does **not** take the zero-copy path for these sizes: it needs the XML profile in that directory.
 
 **Single-stream latency vs rclpy** ([`benchmarks/`](benchmarks/)):
 
@@ -228,7 +228,7 @@ in [docs/adr/](docs/adr/).
 
 **On a real Jetson with a real camera.** On an AGX Xavier (JetPack 5.1.6) with a UVC webcam,
 the camera captures straight into an axon `NvBufSurface` pool, and a second process receives
-the same frame as a host view **and** a CUDA device pointer — no copy anywhere on the path.
+the same frame as a host view **and** a CUDA device pointer — no user-space copy anywhere on the path.
 
 | Check (AGX Xavier, 640×480 YUYV) | Result |
 |---|---|

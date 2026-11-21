@@ -196,7 +196,7 @@ C++에서는 모든 전송이 가볍기 때문에, CPU 차이는 실제로 있�
 | 1 MiB | 36 / **15** | 171 / **25** |
 | 4 MiB | 80 / **59** | 485 / **26** |
 
-host에서는 ROS 2의 zero-copy 경로가 axon에 가깝다. 둘 다 페이로드를 공유 메모리에 한 번 쓰고, axon이 아끼는 것은 메시지마다 붙는 약 20 µs의 고정 비용이다. GPU에서는 ROS 2 메시지가 host 메모리에 있어야 하므로 페이로드가 전송 앞뒤로 D2H와 H2D를 거친다. axon은 device 버퍼 자체를 넘기므로 크기와 상관없이 24~26 µs를 유지한다. 기본 설정의 Fast DDS는 이 크기에서 zero-copy 경로를 쓰지 **않으며**, 그 디렉터리의 XML 프로파일이 필요하다.
+host에서는 ROS 2의 zero-copy 경로가 axon에 가깝다. 둘 다 페이로드를 공유 메모리에 한 번 쓰고, axon이 아끼는 것은 메시지마다 붙는 4~19 µs의 고정 비용이다. GPU에서는 ROS 2 메시지가 host 메모리에 있어야 하므로 페이로드가 전송 앞뒤로 D2H와 H2D를 거친다. axon은 device 버퍼 자체를 넘기므로 147 KiB~4 MiB에서 24~26 µs를 유지한다(16 / 64 MiB에서는 36 / 184 µs). 기본 설정의 Fast DDS는 이 크기에서 zero-copy 경로를 쓰지 **않으며**, 그 디렉터리의 XML 프로파일이 필요하다.
 
 **단일스트림 지연, rclpy 대비** ([`benchmarks/`](benchmarks/)):
 
@@ -210,7 +210,7 @@ ROS2(rclpy)는 같은 데이터를 옮기는 데 **캐시미스 8.6배**, **명�
 
 **로봇 보드 없이도 실제 GPU zero-copy.** axon의 FD 사이드카가 살아 있는 RTX 5080 GPU 메모리 핸들을 프로세스 간에 나른다: 200/200 프레임 on-GPU 검증, **host 페이로드 복사 0**, 1.68 GB zero-copy 이동. 여기에 RT page fault **프레임당 0** 측정. [docs/hardware-verification.md](docs/hardware-verification.md) 및 [docs/adr/](docs/adr/)의 아키텍처 결정 참조.
 
-**실제 Jetson과 실제 카메라에서.** AGX Xavier(JetPack 5.1.6)와 UVC 웹캠으로, 카메라가 axon `NvBufSurface` pool에 직접 캡처하고 두 번째 프로세스가 같은 프레임을 host view **와** CUDA device 포인터로 받는다 — 경로 어디에도 복사가 없다.
+**실제 Jetson과 실제 카메라에서.** AGX Xavier(JetPack 5.1.6)와 UVC 웹캠으로, 카메라가 axon `NvBufSurface` pool에 직접 캡처하고 두 번째 프로세스가 같은 프레임을 host view **와** CUDA device 포인터로 받는다 — 경로 어디에도 사용자 공간 복사가 없다.
 
 | 검증 항목 (AGX Xavier, 640×480 YUYV) | 결과 |
 |---|---|

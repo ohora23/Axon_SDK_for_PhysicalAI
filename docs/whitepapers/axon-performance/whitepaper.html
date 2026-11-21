@@ -201,7 +201,7 @@ small</b>: a fixed cost of up to about 20 µs, shrinking in relative terms as fr
 library default), axon is the slowest zero-copy transport at 16 MiB: 373 µs against 219 µs for iceoryx2
 with the producer's clock held (474 vs 238 µs without), and 3271 vs 2348 µs at 64 MiB. The cost grows with
 ring depth (1 / 2 / 4 buffers: 220 / 230 / 373 µs) and with the DRAM traffic the ring causes; one buffer
-matches iceoryx2. A shallower ring makes a torn frame more likely for a slow reader, so the depth is a
+matches iceoryx2 at 16 MiB and is 2.5 % faster than it at 64 MiB (2155 vs 2210 µs). A shallower ring makes a torn frame more likely for a slow reader, so the depth is a
 trade-off to size per stream (<code>docs/usage.md</code>); at this size it is a loss to report, not to hide.</p>
 
 <h3>4.3 Tail latency under load <span class="v no">NOT A WIN</span> for any transport</h3>

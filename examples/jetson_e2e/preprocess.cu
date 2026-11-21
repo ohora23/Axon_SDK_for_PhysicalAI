@@ -30,6 +30,32 @@ __global__ void yuyv_to_nchw_kernel(const uint8_t* src, uint32_t src_w, uint32_t
     dst[i + 2 * plane] = (b / 255.0f - 0.406f) / 0.225f;
 }
 
+// NV12: Y plane is planar, UV plane is interleaved (U,V) at half resolution.
+__global__ void nv12_to_nchw_kernel(const uint8_t* src, uint32_t src_w, uint32_t src_h,
+                                    uint32_t row_pitch, uint32_t uv_offset,
+                                    float* dst, int dst_w, int dst_h) {
+    const int px = blockIdx.x * blockDim.x + threadIdx.x;
+    const int py = blockIdx.y * blockDim.y + threadIdx.y;
+    if (px >= dst_w || py >= dst_h) return;
+
+    const uint32_t sx = src_w * static_cast<uint32_t>(px) / static_cast<uint32_t>(dst_w);
+    const uint32_t sy = src_h * static_cast<uint32_t>(py) / static_cast<uint32_t>(dst_h);
+    const float y = src[sy * row_pitch + sx];
+
+    const uint8_t* uv = src + uv_offset + (sy / 2) * row_pitch + (sx & ~1u);
+    const float u = uv[0] - 128.0f;
+    const float v = uv[1] - 128.0f;
+
+    const float r = fminf(fmaxf(y + 1.402f * v, 0.0f), 255.0f);
+    const float g = fminf(fmaxf(y - 0.344f * u - 0.714f * v, 0.0f), 255.0f);
+    const float b = fminf(fmaxf(y + 1.772f * u, 0.0f), 255.0f);
+
+    const int plane = dst_w * dst_h, i = py * dst_w + px;
+    dst[i]             = (r / 255.0f - 0.485f) / 0.229f;
+    dst[i + plane]     = (g / 255.0f - 0.456f) / 0.224f;
+    dst[i + 2 * plane] = (b / 255.0f - 0.406f) / 0.225f;
+}
+
 }  // namespace
 
 cudaError_t launch_yuyv_to_nchw(const uint8_t* src, uint32_t src_w, uint32_t src_h,
@@ -38,5 +64,15 @@ cudaError_t launch_yuyv_to_nchw(const uint8_t* src, uint32_t src_w, uint32_t src
     const dim3 block(16, 16);
     const dim3 grid((dst_w + 15) / 16, (dst_h + 15) / 16);
     yuyv_to_nchw_kernel<<<grid, block, 0, s>>>(src, src_w, src_h, row_pitch, dst, dst_w, dst_h);
+    return cudaGetLastError();
+}
+
+cudaError_t launch_nv12_to_nchw(const uint8_t* src, uint32_t src_w, uint32_t src_h,
+                                uint32_t row_pitch, uint32_t uv_offset,
+                                float* dst, int dst_w, int dst_h,
+                                cudaStream_t s) {
+    const dim3 block(16, 16);
+    const dim3 grid((dst_w + 15) / 16, (dst_h + 15) / 16);
+    nv12_to_nchw_kernel<<<grid, block, 0, s>>>(src, src_w, src_h, row_pitch, uv_offset, dst, dst_w, dst_h);
     return cudaGetLastError();
 }

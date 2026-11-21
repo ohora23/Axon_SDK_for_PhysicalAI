@@ -115,7 +115,7 @@ for ax, c, title in zip(axes, ["default_warm", "jetson_clocks_warm"], ["default 
             w = pct(data[(f"{cam}_{c}", m)][k], .5) / 1e3
             ax.barh(i, w, left=left, color=col, label=label if i == 0 else None, height=0.6)
             left += w
-        ax.text(left, i, f" {left:.1f}", va="center", fontsize=7.5)
+        ax.text(left, i, f" {pct(data[(f'{cam}_{c}', m)]['capture_to_inferred'], .5) / 1e3:.2f}", va="center", fontsize=7.5)
     ax.set_yticks(range(len(rows5)), [r[2] for r in rows5])
     ax.set_title(title, fontsize=9)
     ax.set_xlabel("median, ms (capture → inferred)")

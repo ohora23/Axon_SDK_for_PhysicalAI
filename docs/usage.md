@@ -415,7 +415,7 @@ like this:
 
 Two more points when fusing with proprioception and control:
 
-- uvcvideo stamps the frame when its **first USB packet** arrives; exposure (and possibly part of
+- uvcvideo stamps the frame while processing its **first USB packet** (up to one URB, a few ms, after it); exposure (and possibly part of
   readout) happens before that. Shift the camera time back accordingly when aligning with joint encoders or tactile
   sensors.
 - Put the perception consumer on an isolated CPU, away from I/O and other inference

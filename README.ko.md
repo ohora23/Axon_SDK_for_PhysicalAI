@@ -435,7 +435,7 @@ A. Apache 2.0 (특허 그랜트 포함 — 로봇 산업 채택에 더 친화적
 - [x] **Jetson NvBufSurface 백엔드** — `PoolBackend::NvBufSurface` (`AXON_ENABLE_JETSON`): UVC 카메라가 pool에 직접 캡처하고, 다른 프로세스가 같은 프레임을 host view **와** CUDA 포인터로 복사 없이 받음. 실제 웹캠과 AGX Xavier에서 검증(`examples/jetson_camera/`, host==device 4/4, staleness ~0.5 ms)
 - [x] **방향 D — NVENC 데이터 플라이휠** — 공유 GPU 버퍼에서 곧장 디스크로 녹화: 녹화기가 각 `latest_view()`를 호스트 복사 없이 하드웨어 NVENC에 전달(`examples/nvenc_flywheel/`, 디코드로 검증된 H.264)
 - [x] **ROS 2 zero-copy 경로와의 공정한 C++ 비교** — rclcpp, loaned message + Fast DDS data-sharing, host와 GPU(`benchmarks/ros2_cpp/`): host 1 MiB 15 vs 36 µs, GPU→GPU 4 MiB 26 vs 485 µs(복사해 가는 소비자), 297 MB/s 다중스트림 카메라 p50 29 vs 44 µs (0.019 vs 0.038 cores)
-- [x] **이벤트 방식 소비자** — `TensorSubscriber::wait_for_update` / `wait_any`가 메타데이터 슬롯의 futex에서 기다린다(스트림 여러 개는 `futex_waitv`). 생산자는 누가 기다릴 때만 `FUTEX_WAKE`를 호출하므로 RT 생산자의 `publish()`에는 syscall이 없다
+- [x] **이벤트 방식 소비자** — `TensorSubscriber::wait_for_update` / `wait_any`가 메타데이터 슬롯의 futex에서 기다린다(스트림 여러 개는 `futex_waitv`). 생산자는 누가 기다릴 때만 `FUTEX_WAKE`를 호출한다. 그 밖에 `publish()`는 늦게 붙는 구독자를 받으려고 최대 10 ms마다 non-blocking `poll(2)`을 한 번 한다
 - [x] **조용한 드롭 제거** — 맞지 않는 디스크립터는 `publish()`가 `EMSGSIZE`/`EINVAL`과 함께 -1을 돌려주고 seqno를 쓰지 않는다. 핸드셰이크에 실을 수 없는 import 정보는 `TensorPublisher::create()`가 거부한다(`E2BIG`). Python 바인딩은 예외를 던진다
 
 다음:

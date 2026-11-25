@@ -38,7 +38,9 @@ message" consumer also couples the control loop to producer rate and queue depth
   stayed at **2191** (identical at 20× the frames) and major (disk) faults were **0** — the
   RT loop adds no faults. Directly validates the `T_view ≈ 0` term of the staleness formula.
 - **~0 syscalls per frame**: 16 transport syscalls total across ~964 frames (the one-time
-  handshake), each frame being a seqlock store/load in shared memory.
+  handshake), each frame being a seqlock store/load in shared memory. (Transport syscalls only:
+  the producer also polls its sidecar socket for late subscribers, on every frame until PR #71 and at
+  most every 10 ms since; see docs/hardware-verification.md §3.)
 - **Seqlock retries ~0**: MockSystem seqlock-retry distribution measured p50/p99/max = 0 in
   steady state.
 - **Net effect**: despite paying for a 1 kHz polling loop that ROS2's event model skips,

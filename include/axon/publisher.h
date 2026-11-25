@@ -47,7 +47,9 @@ public:
     // sync_fd is valid, the fence FD is delivered through the sidecar.
     // A late-joining subscriber is accepted by publish() at most every 10 ms
     // (one non-blocking poll per interval), so publish() makes no syscall on
-    // most frames.
+    // most frames. A subscriber that connects within 10 ms of the last check is
+    // picked up by a later publish(); after a final burst, call handshake_pool()
+    // or reannounce_pool() from non-RT code so it is not left waiting.
     //
     // Returns 0, or -1 when the descriptor is rejected and nothing is published:
     // errno = EMSGSIZE if [offset, offset + size) does not fit in the pool buffer,

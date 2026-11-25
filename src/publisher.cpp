@@ -27,6 +27,7 @@ namespace axon {
 
 namespace {
 constexpr int kHandshakeWaitMs = 2000;  // wait for the first consumer to connect
+constexpr std::uint64_t kAcceptIntervalNs = 10'000'000;  // throttle accept to every 10 ms
 }
 
 struct TensorPublisher::Impl {
@@ -45,6 +46,7 @@ struct TensorPublisher::Impl {
 
     bool pool_cached = false;
     PoolGeneration cached_gen = 0;
+    std::uint64_t last_accept_ns = 0;
 
     // Hand the server the pool bundle (FDs + backend import blob). It copies
     // both, so skip it unless forced or the pool generation changed.
@@ -178,9 +180,14 @@ int TensorPublisher::publish(AcquiredDescriptor&& d, int sync_fd) {
 
     // Pick up any consumer that connected after the initial handshake (non-RT,
     // non-blocking); they receive the current pool bundle. Re-cached only when
-    // the pool generation moved, so the steady state copies nothing.
+    // the pool generation moved, so the steady state copies nothing. The accept
+    // check (one poll(2)) runs at most every kAcceptIntervalNs, so most frames
+    // make no syscall.
     impl_->cache_pool(false);
-    impl_->server->accept_and_handshake(0);
+    if (desc->producer_publish_ts_ns - impl_->last_accept_ns >= kAcceptIntervalNs) {
+        impl_->last_accept_ns = desc->producer_publish_ts_ns;
+        impl_->server->accept_and_handshake(0);
+    }
     return 0;
 }
 

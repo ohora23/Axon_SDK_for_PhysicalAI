@@ -173,7 +173,7 @@ Fast-RTPS on the same workload. Full detail: [docs/hardware-verification.md](doc
 | Latency vs ROS 2's zero-copy path (C++, loaned messages + data-sharing) | low | **host 1 MiB: 15 vs 36 µs (2.4×); GPU→GPU 4 MiB: 26 vs 485 µs (19×, copy-out consumer or MPS); multi-stream camera p50 29 vs 44 µs** ✅ |
 | CPU at 297 MB/s (multi-stream, C++, vs ROS 2 zero-copy) | low | **0.019 vs 0.038 cores event-driven (0.015 in a 1 kHz loop)** — both under 0.1 core ✅ |
 | Frame delivery under load (C++) | no drops | **100 % on every camera stream for every transport** (ROS 2 needs a Fast DDS SHM segment larger than a frame; the benchmark refuses to run without one) ✅ |
-| Memory cost (same workload, C++, vs ROS 2 zero-copy) | 0 payload copies | **cache-misses 2.8× lower event-driven, 4.2× in a 1 kHz loop; ~0 transport syscalls/frame** ✅ |
+| Memory cost (same workload, C++, vs ROS 2 zero-copy) | 0 payload copies | **cache-misses 2.8× lower event-driven, 4.2× in a 1 kHz loop; no socket syscalls per frame (the producer polls for late subscribers at most every 10 ms)** ✅ |
 | Page faults during RT | **0** | **0 / frame** (flat at 20× the frames) ✅ |
 | GPU zero-copy import | real hardware | **RTX 5080: 200/200 frames, 0 copies, 1.68 GB** ✅ |
 | Sensor → accelerator, no copy | real board + real sensor | **AGX Xavier + UVC webcam: host == CUDA view on 30/30 frames, staleness ~0.5 ms** ✅ |

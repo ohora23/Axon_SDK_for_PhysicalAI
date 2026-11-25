@@ -45,6 +45,9 @@ public:
     // Publish metadata — writes into the Iceoryx2 SHM queue and stamps
     // producer_publish_ts_ns. When sync_fence_kind == SyncFileViaSidecar and
     // sync_fd is valid, the fence FD is delivered through the sidecar.
+    // A late-joining subscriber is accepted by publish() at most every 10 ms
+    // (one non-blocking poll per interval), so publish() makes no syscall on
+    // most frames.
     //
     // Returns 0, or -1 when the descriptor is rejected and nothing is published:
     // errno = EMSGSIZE if [offset, offset + size) does not fit in the pool buffer,

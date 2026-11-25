@@ -166,7 +166,7 @@ flowchart LR
 | ROS 2 zero-copy 경로 대비 지연 (C++, loaned message + data-sharing) | 낮게 | **host 1 MiB: 15 vs 36 µs (2.4×), GPU→GPU 4 MiB: 26 vs 485 µs (19×, 복사해 가는 소비자 또는 MPS), 다중스트림 카메라 p50 29 vs 44 µs** ✅ |
 | 297 MB/s에서 CPU (다중스트림, C++, ROS 2 zero-copy 대비) | 낮게 | **이벤트 방식 0.019 vs 0.038 cores (1 kHz 루프는 0.015)**, 둘 다 0.1 core 미만 ✅ |
 | 부하 시 프레임 전달 (C++) | 드롭 없음 | **모든 전송에서 모든 카메라 스트림 100 %** (ROS 2는 프레임보다 큰 Fast DDS SHM 세그먼트가 필요하며, 벤치마크는 없으면 실행을 거부한다) ✅ |
-| 메모리 비용 (같은 워크로드, C++, ROS 2 zero-copy 대비) | 페이로드 복사 0 | **캐시미스 이벤트 방식 2.8×, 1 kHz 루프 4.2× 적음; 프레임당 전송 syscall ~0** ✅ |
+| 메모리 비용 (같은 워크로드, C++, ROS 2 zero-copy 대비) | 페이로드 복사 0 | **캐시미스 이벤트 방식 2.8×, 1 kHz 루프 4.2× 적음; 프레임당 소켓 syscall 0(생산자는 늦게 붙는 구독자를 최대 10 ms마다 poll로 확인)** ✅ |
 | RT 중 page fault | **0** | **0 / frame** (프레임 20배에도 평평) ✅ |
 | GPU zero-copy import | 실제 하드웨어 | **RTX 5080: 200/200 프레임, 복사 0, 1.68 GB** ✅ |
 | 센서 → 가속기, 복사 없음 | 실제 보드 + 실제 센서 | **AGX Xavier + UVC 웹캠: host == CUDA view 30/30 프레임, staleness ~0.5 ms** ✅ |

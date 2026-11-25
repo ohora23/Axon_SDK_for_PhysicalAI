@@ -80,3 +80,6 @@ spike-runs/
 docs/_build/
 *.pdf
 !docs/whitepapers/*.pdf
+
+# fast-anything profiling output
+.fast/

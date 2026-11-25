@@ -115,7 +115,10 @@ Measured (scale 1, ~964 frames, 8 streams, 2 s):
 
 axon's 16 transport syscalls are exactly the one-time FD handshake (8 streams × 1 sendmsg);
 across 964 published frames it adds **0 transport syscalls** — each frame is a seqlock
-store into shared memory. ROS2 runs 25× the syscalls (DDS machinery). Note: Fast-RTPS uses
+store into shared memory. (Transport here means send/recv. The producer also called `poll(2)` on
+the sidecar socket on every `publish()` to accept late subscribers — found with strace in
+2026-11, 2003 polls for 2000 frames; since PR #70 that check runs at most every 10 ms, 203 polls for
+the same run.) ROS2 runs 25× the syscalls (DDS machinery). Note: Fast-RTPS uses
 SHM for large localhost payloads, so the payload copy shows up in §4's cache-misses rather
 than as `sendmsg`.
 

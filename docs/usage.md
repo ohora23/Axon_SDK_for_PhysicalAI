@@ -151,7 +151,7 @@ it: a wait returns at once if a frame arrived since this subscriber's last
 `latest_view()`. The publisher only makes a `FUTEX_WAKE` syscall while someone
 is waiting. Apart from that, `publish()` makes one non-blocking `poll(2)` at most
 every 10 ms, to accept a subscriber that connects late; every other frame is
-syscall-free (before PR #70 it polled on every frame). On older kernels (Jetson L4T r35 is 5.10), with more
+syscall-free (before PR #71 it polled on every frame). On older kernels (Jetson L4T r35 is 5.10), with more
 than 128 streams, or on the Iceoryx2 backend it falls back to polling every
 100 µs. Keep `wait_any` out of the RT loop itself: the RT loop stays on
 `latest_view()` at its own rate.

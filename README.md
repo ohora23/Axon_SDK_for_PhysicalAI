@@ -173,7 +173,7 @@ Fast-RTPS on the same workload. Full detail: [docs/hardware-verification.md](doc
 | Latency vs ROS 2's zero-copy path (C++, loaned messages + data-sharing) | low | **host 1 MiB: 15 vs 36 µs (2.4×); GPU→GPU 4 MiB: 26 vs 485 µs (19×, copy-out consumer or MPS); multi-stream camera p50 29 vs 44 µs** ✅ |
 | CPU at 297 MB/s (multi-stream, C++, vs ROS 2 zero-copy) | low | **0.019 vs 0.038 cores event-driven (0.015 in a 1 kHz loop)** — both under 0.1 core ✅ |
 | Frame delivery under load (C++) | no drops | **100 % on every camera stream for every transport** (ROS 2 needs a Fast DDS SHM segment larger than a frame; the benchmark refuses to run without one) ✅ |
-| Memory cost (same workload, C++, vs ROS 2 zero-copy) | 0 payload copies | **cache-misses 2.8× lower event-driven, 4.2× in a 1 kHz loop; ~0 transport syscalls/frame** ✅ |
+| Memory cost (same workload, C++, vs ROS 2 zero-copy) | 0 payload copies | **cache-misses 2.8× lower event-driven, 4.2× in a 1 kHz loop; no socket syscalls per frame (the producer polls for late subscribers at most every 10 ms)** ✅ |
 | Page faults during RT | **0** | **0 / frame** (flat at 20× the frames) ✅ |
 | GPU zero-copy import | real hardware | **RTX 5080: 200/200 frames, 0 copies, 1.68 GB** ✅ |
 | Sensor → accelerator, no copy | real board + real sensor | **AGX Xavier + UVC webcam: host == CUDA view on 30/30 frames, staleness ~0.5 ms** ✅ |
@@ -470,7 +470,7 @@ Design → working library + measured results. Done (merged to `main`):
 - [x] **Jetson NvBufSurface backend** — `PoolBackend::NvBufSurface` (`AXON_ENABLE_JETSON`): a UVC camera captures straight into the pool and another process gets the frame as a host view **and** a CUDA pointer, no copy. Verified on AGX Xavier with a real webcam (`examples/jetson_camera/`, host==device 4/4, staleness ~0.5 ms)
 - [x] **Direction D — NVENC data flywheel** — record the stream to disk straight from the shared GPU buffer: the recorder feeds each `latest_view()` to hardware NVENC with no host copy (`examples/nvenc_flywheel/`, decode-verified H.264)
 - [x] **Fair C++ benchmark against ROS 2's zero-copy path** — rclcpp, loaned messages + Fast DDS data-sharing, host and GPU (`benchmarks/ros2_cpp/`): host 1 MiB 15 vs 36 µs, GPU→GPU 4 MiB 26 vs 485 µs (copy-out consumer); multi-stream at 297 MB/s camera p50 29 vs 44 µs for 0.019 vs 0.038 cores
-- [x] **Event-driven consumer** — `TensorSubscriber::wait_for_update` / `wait_any` block on a futex in the metadata slot (`futex_waitv` for several streams); the publisher pays a `FUTEX_WAKE` only while someone waits, so `publish()` stays syscall-free for RT producers
+- [x] **Event-driven consumer** — `TensorSubscriber::wait_for_update` / `wait_any` block on a futex in the metadata slot (`futex_waitv` for several streams); the publisher pays a `FUTEX_WAKE` only while someone waits, so `publish()` adds no `FUTEX_WAKE` for RT producers without an event-driven consumer (it does one non-blocking `poll(2)` at most every 10 ms to accept late subscribers)
 - [x] **No silent drops** — `publish()` returns -1 with `EMSGSIZE`/`EINVAL` for a descriptor that does not fit (and spends no seqno), `TensorPublisher::create()` refuses import params a handshake cannot carry (`E2BIG`), and the Python bindings raise
 
 Next:
